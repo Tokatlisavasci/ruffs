@@ -275,11 +275,13 @@ app.post('/videos/save', async (req, res) => {
     const saveId = `${videoId}_${uidInfo.uid}`;
     const saveRef = db.doc(`saves/${saveId}`);
     const videoRef = db.doc(`videos/${videoId}`);
+    const meRef = db.doc(`users/${uidInfo.uid}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const [saveSnap, videoSnap] = await Promise.all([tx.get(saveRef), tx.get(videoRef)]);
+      const [saveSnap, videoSnap, meSnap] = await Promise.all([tx.get(saveRef), tx.get(videoRef), tx.get(meRef)]);
       if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
       const vd = videoSnap.data() || {};
+      const meD = meSnap.exists ? (meSnap.data() || {}) : {};
       const cur = typeof vd.savesCount === 'number' ? vd.savesCount : 0;
       if (saveSnap.exists) {
         tx.delete(saveRef);
@@ -290,6 +292,20 @@ app.post('/videos/save', async (req, res) => {
         tx.set(saveRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
         const next = cur + 1;
         tx.update(videoRef, { savesCount: next });
+        if (vd.uid && vd.uid !== uidInfo.uid) {
+          const notifRef = db.collection('users').doc(vd.uid).collection('notifications').doc();
+          tx.set(notifRef, {
+            type: 'save',
+            fromUid: uidInfo.uid,
+            fromUsername: meD.username || null,
+            fromDisplayName: meD.displayName || null,
+            fromAvatar: meD.avatar || meD.photoURL || null,
+            videoId,
+            videoThumb: vd.thumbnailUrl || vd.mediaUrl || vd.videoUrl || null,
+            read: false,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
         return { saved: true, savesCount: next };
       }
     });
@@ -347,11 +363,13 @@ app.post('/videos/like', async (req, res) => {
     const likeId = `${videoId}_${uidInfo.uid}`;
     const likeRef = db.doc(`likes/${likeId}`);
     const videoRef = db.doc(`videos/${videoId}`);
+    const meRef = db.doc(`users/${uidInfo.uid}`);
 
     const result = await db.runTransaction(async (tx) => {
-      const [likeSnap, videoSnap] = await Promise.all([tx.get(likeRef), tx.get(videoRef)]);
+      const [likeSnap, videoSnap, meSnap] = await Promise.all([tx.get(likeRef), tx.get(videoRef), tx.get(meRef)]);
       if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
       const vd = videoSnap.data() || {};
+      const meD = meSnap.exists ? (meSnap.data() || {}) : {};
       const cur = typeof vd.likesCount === 'number' ? vd.likesCount : 0;
       if (likeSnap.exists) {
         tx.delete(likeRef);
@@ -362,6 +380,20 @@ app.post('/videos/like', async (req, res) => {
         tx.set(likeRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
         const next = cur + 1;
         tx.update(videoRef, { likesCount: next });
+        if (vd.uid && vd.uid !== uidInfo.uid) {
+          const notifRef = db.collection('users').doc(vd.uid).collection('notifications').doc();
+          tx.set(notifRef, {
+            type: 'like',
+            fromUid: uidInfo.uid,
+            fromUsername: meD.username || null,
+            fromDisplayName: meD.displayName || null,
+            fromAvatar: meD.avatar || meD.photoURL || null,
+            videoId,
+            videoThumb: vd.thumbnailUrl || vd.mediaUrl || vd.videoUrl || null,
+            read: false,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        }
         return { liked: true, likesCount: next };
       }
     });
