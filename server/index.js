@@ -215,6 +215,51 @@ app.post('/uploads/video', (req, res) => {
   });
 });
 
+app.post('/uploads/video/delete', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+
+    let { videoId, loopsId } = req.body || {};
+    // Sahiplik doğrulaması (admin + firestore erişimi varsa)
+    if (admin && videoId) {
+      try {
+        const snap = await admin.firestore().doc(`videos/${videoId}`).get();
+        if (snap.exists) {
+          const d = snap.data() || {};
+          if (d.uid && d.uid !== uidInfo.uid) return res.status(403).json({ error: 'Bu videoyu silme yetkin yok' });
+          if (!loopsId && d.loopsId) loopsId = d.loopsId;
+        }
+      } catch (e) {
+        console.warn('delete ownership check skipped:', e?.message || e);
+      }
+    }
+
+    const cfg = loopsConfig();
+    if (loopsId && cfg) {
+      const id = encodeURIComponent(String(loopsId));
+      const tries = [
+        { url: `${cfg.base}/api/v1/video/delete/${id}`, method: 'POST' },
+        { url: `${cfg.base}/api/v1/video/${id}`, method: 'DELETE' },
+      ];
+      let ok = false;
+      for (const t of tries) {
+        try {
+          const r = await fetch(t.url, { method: t.method, headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/json' } });
+          const data = await r.json().catch(() => ({}));
+          if (r.ok || data?.error?.code === 'ok') { ok = true; break; }
+        } catch {}
+      }
+      if (!ok) console.warn('loops remote delete did not confirm for', loopsId);
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || 'Silinemedi' });
+  }
+});
+
 app.post('/uploads/sign', async (req, res) => {
   try {
     const cfg = cloudinaryConfig();

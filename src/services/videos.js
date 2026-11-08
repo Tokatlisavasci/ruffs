@@ -6,6 +6,8 @@ import {
   getDocs,
   orderBy,
   serverTimestamp,
+  deleteDoc,
+  doc,
 } from 'firebase/firestore';
 import { Platform } from 'react-native';
 import { db, isFirebaseConfigured, auth } from '../config/firebase';
@@ -316,4 +318,33 @@ export async function uploadCloudinaryAsset({ uri, userId, mediaType = 'image', 
   const url = upData.secure_url || upData.url;
   if (!url) throw new Error('Yükleme tamamlandı ancak URL alınamadı.');
   return { url, publicId: upData.public_id || null, raw: upData };
+}
+
+
+export async function deleteUserVideo({ videoId, loopsId, user }) {
+  if (!isFirebaseConfigured || !db) throw new Error('Firebase yapılandırılmadı.');
+  if (!user?.id) throw new Error('Oturum gerekli');
+  if (!videoId) throw new Error('Video bulunamadı');
+
+  // Loops tarafını (varsa) sunucu üzerinden silmeye çalış; başarısız olsa bile Ruffs kaydını sileriz.
+  if (loopsId) {
+    try {
+      const headers = await getSignHeaders();
+      await withTimeout(
+        fetch(`${API_BASE_URL}/uploads/video/delete`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ videoId, loopsId }),
+        }),
+        20000,
+        'Silme isteği zaman aşımına uğradı.'
+      );
+    } catch (e) {
+      // en iyi çaba: Loops silinemese de uygulamadan kaldır
+      console.warn('loops delete (best-effort) failed:', e?.message || e);
+    }
+  }
+
+  await deleteDoc(doc(db, 'videos', videoId));
+  return true;
 }

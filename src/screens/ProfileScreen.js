@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserVideos, deriveVideoThumbnail } from '../services/videos';
+import { fetchUserVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
 import VideoCard from '../components/VideoCard';
 
 const { height } = Dimensions.get('window');
@@ -130,6 +130,7 @@ const ProfileScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(null);
   const [viewerIndex, setViewerIndex] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const isFocused = useIsFocused();
   useEffect(() => { if (!isFocused) setViewerIndex(null); }, [isFocused]);
 
@@ -172,6 +173,29 @@ const ProfileScreen = () => {
     Alert.alert('Çıkış yap', 'Hesabından çıkmak istiyor musun?', [
       { text: 'Vazgeç', style: 'cancel' },
       { text: 'Çıkış yap', style: 'destructive', onPress: () => { logout().catch(() => {}); } },
+    ]);
+  };
+
+  const handleDeleteVideo = (v) => {
+    if (!v?.id || deletingId) return;
+    Alert.alert('Videoyu sil', 'Bu videoyu silmek istiyor musun? Bu işlem geri alınamaz.', [
+      { text: 'Vazgeç', style: 'cancel' },
+      {
+        text: 'Sil',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingId(v.id);
+          try {
+            await deleteUserVideo({ videoId: v.id, loopsId: v.loopsId, user });
+            setMyVideos((prev) => prev.filter((x) => x.id !== v.id));
+            setViewerIndex((idx) => (idx == null ? null : null)); // görüntüleyici açıksa kapat
+          } catch (e) {
+            Alert.alert('Silinemedi', e?.message || 'Video silinirken bir sorun oluştu.');
+          } finally {
+            setDeletingId(null);
+          }
+        },
+      },
     ]);
   };
 
@@ -323,12 +347,22 @@ const ProfileScreen = () => {
                 key={v.id}
                 style={[styles.gridItem, (i % 3 === 2) && { marginRight: 0 }]}
                 onPress={() => (v.mediaUrl || v.videoUrl) ? setViewerIndex(i) : Alert.alert('Açılamadı', 'Medya adresi bulunamadı.')}
+                onLongPress={() => handleDeleteVideo(v)}
+                delayLongPress={350}
               >
                 <GridThumb uri={thumbUri(v)} fallback={deriveVideoThumbnail(v.mediaUrl || v.videoUrl)} />
                 <View style={styles.thumbOverlay}>
                   <Ionicons name="play-outline" size={14} color="#fff" />
                   <Text style={styles.thumbViews}>{formatCount(v.viewsCount || 0)}</Text>
                 </View>
+                <TouchableOpacity
+                  style={styles.thumbDeleteBtn}
+                  onPress={() => handleDeleteVideo(v)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  disabled={deletingId === v.id}
+                >
+                  <Ionicons name={deletingId === v.id ? 'hourglass-outline' : 'trash-outline'} size={14} color="#fff" />
+                </TouchableOpacity>
               </TouchableOpacity>
             ))}
           </View>
