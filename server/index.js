@@ -32,7 +32,7 @@ const uploadMw = multer({
 });
 
 function loopsConfig() {
-  const base = (process.env.LOOPS_BASE_URL || 'https://loops.video').replace(//$/, '');
+  const base = (process.env.LOOPS_BASE_URL || 'https://loops.video').replace(/\/$/, '');
   const token = process.env.LOOPS_ACCESS_TOKEN || process.env.LOOPS_BEARER_TOKEN;
   if (!token) return null;
   return { base, token };
@@ -66,7 +66,7 @@ function pickLoopsMedia(data) {
   const hls = media.hls_url || root?.hls_url || null;
   const thumb = media.thumbnail || root?.thumbnail || root?.poster || null;
   const id = root?.id || root?.hid || data?.id || null;
-  const loopsUrl = root?.url && /^https?:/i.test(root.url) ? root.url : (root?.shortcode ? `${(process.env.LOOPS_BASE_URL || 'https://loops.video').replace(//$/, '')}/v/${root.shortcode}` : null);
+  const loopsUrl = root?.url && /^https?:/i.test(root.url) ? root.url : (root?.shortcode ? `${(process.env.LOOPS_BASE_URL || 'https://loops.video').replace(/\/$/, '')}/v/${root.shortcode}` : null);
   return { mediaUrl: src || hls, playbackUrl: src || hls, hlsUrl: hls, thumbnailUrl: thumb, loopsId: id, loopsUrl };
 }
 
