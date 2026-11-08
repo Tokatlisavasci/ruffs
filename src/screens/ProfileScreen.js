@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserVideos, fetchLikedVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
+import { fetchUserVideos, fetchLikedVideos, fetchSavedVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
 import VideoCard from '../components/VideoCard';
 
 const { height } = Dimensions.get('window');
@@ -43,7 +43,7 @@ function mapToFeedVideo(v, user) {
     user: {
       username: username.startsWith('@') ? username : `@${username}`,
       displayName: v.displayName || user?.displayName || '',
-      avatar: v.avatar || user?.avatar || 'https://i.pravatar.cc/150?img=12',
+      avatar: v.avatar || user?.avatar || null,
       isVerified: false,
       isFollowing: false,
     },
@@ -54,7 +54,7 @@ function mapToFeedVideo(v, user) {
     },
     music: {
       title: `Orijinal ses - ${username}`,
-      cover: v.avatar || user?.avatar || 'https://i.pravatar.cc/150?img=12',
+      cover: v.avatar || user?.avatar || null,
     },
   };
 }
@@ -82,7 +82,7 @@ function GridThumb({ uri, fallback }) {
   );
 }
 
-function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId, onLikeChanged }) {
+function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId, onLikeChanged, onSaveChanged }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [h, setH] = useState(height);
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
@@ -112,9 +112,10 @@ function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId, 
         onDelete={onDelete ? () => onDelete(item) : undefined}
         deleting={deletingId === item.id}
         onLikeChanged={onLikeChanged}
+        onSaveChanged={onSaveChanged}
       />
     ),
-    [currentIndex, h, onDelete, deletingId, onLikeChanged]
+    [currentIndex, h, onDelete, deletingId, onLikeChanged, onSaveChanged]
   );
 
   // Sekme içi katman: alt (Liquid Glass) bar görünür kalır.
@@ -158,6 +159,9 @@ const ProfileScreen = () => {
   const [likedVideos, setLikedVideos] = useState([]);
   const [likedLoading, setLikedLoading] = useState(false);
   const [likedViewerIndex, setLikedViewerIndex] = useState(null);
+  const [savedVideos, setSavedVideos] = useState([]);
+  const [savedLoading, setSavedLoading] = useState(false);
+  const [savedViewerIndex, setSavedViewerIndex] = useState(null);
   const isFocused = useIsFocused();
   const loadLiked = useCallback(async () => {
     if (!user?.id) return;
@@ -169,7 +173,17 @@ const ProfileScreen = () => {
     finally { setLikedLoading(false); }
   }, [user?.id]);
 
-  useEffect(() => { if (!isFocused) { setViewerIndex(null); setLikedViewerIndex(null); } }, [isFocused]);
+  const loadSaved = useCallback(async () => {
+    if (!user?.id) return;
+    setSavedLoading(true);
+    try {
+      const items = await fetchSavedVideos(user.id);
+      setSavedVideos(items);
+    } catch {}
+    finally { setSavedLoading(false); }
+  }, [user?.id]);
+
+  useEffect(() => { if (!isFocused) { setViewerIndex(null); setLikedViewerIndex(null); setSavedViewerIndex(null); } }, [isFocused]);
 
   const load = async () => {
     if (!user?.id) {
@@ -219,6 +233,16 @@ const ProfileScreen = () => {
       if (!liked) return prev.filter((x) => x.id !== videoId);
       return prev.map((x) => (x.id === videoId ? { ...x, isLiked: liked, likesCount } : x));
     });
+    setSavedVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isLiked: liked, likesCount } : x)));
+  };
+
+  const handleSaveChanged = ({ videoId, saved }) => {
+    setMyVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x)));
+    setLikedVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x)));
+    setSavedVideos((prev) => {
+      if (!saved) return prev.filter((x) => x.id !== videoId);
+      return prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x));
+    });
   };
 
   const handleDeleteVideo = (v) => {
@@ -261,6 +285,7 @@ const ProfileScreen = () => {
 
   const feedVideos = myVideos.map((v) => mapToFeedVideo(v, user));
   const likedFeedVideos = likedVideos.map((v) => ({ ...mapToFeedVideo(v, { username: v.username, displayName: v.displayName, avatar: v.avatar }), isLiked: true }));
+  const savedFeedVideos = savedVideos.map((v) => ({ ...mapToFeedVideo(v, { username: v.username, displayName: v.displayName, avatar: v.avatar }), isBookmarked: true }));
 
   return (
     <View style={styles.container}>
@@ -272,6 +297,7 @@ const ProfileScreen = () => {
           onDelete={handleDeleteVideo}
           deletingId={deletingId}
           onLikeChanged={handleLikeChanged}
+          onSaveChanged={handleSaveChanged}
         />
       ) : likedViewerIndex != null ? (
         <VideoFeedViewer
@@ -279,6 +305,15 @@ const ProfileScreen = () => {
           initialIndex={likedViewerIndex}
           onClose={() => setLikedViewerIndex(null)}
           onLikeChanged={handleLikeChanged}
+          onSaveChanged={handleSaveChanged}
+        />
+      ) : savedViewerIndex != null ? (
+        <VideoFeedViewer
+          videos={savedFeedVideos}
+          initialIndex={savedViewerIndex}
+          onClose={() => setSavedViewerIndex(null)}
+          onLikeChanged={handleLikeChanged}
+          onSaveChanged={handleSaveChanged}
         />
       ) : null}
 
@@ -304,7 +339,11 @@ const ProfileScreen = () => {
       >
         {/* Profil üstü */}
         <View style={styles.profileTop}>
-          <Image source={{ uri: user.avatar }} style={styles.avatar} />
+          {user?.avatar ? (
+            <Image source={{ uri: user.avatar }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, { backgroundColor: '#fff' }]} />
+          )}
           <View style={styles.stats}>
             <View style={styles.stat}>
               <Text style={styles.statNum}>{formatCount(user.stats?.following)}</Text>
@@ -328,8 +367,8 @@ const ProfileScreen = () => {
           <TouchableOpacity style={styles.editBtn} onPress={() => navigation.navigate('EditProfile')}>
             <Text style={styles.editBtnText}>Profili düzenle</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.iconBtn}>
-            <Ionicons name="bookmark-outline" size={18} color="#fff" />
+          <TouchableOpacity style={styles.iconBtn} onPress={() => { setActiveTab('saved'); loadSaved(); }}>
+            <Ionicons name={activeTab === 'saved' ? 'bookmark' : 'bookmark-outline'} size={18} color={activeTab === 'saved' ? '#face15' : '#fff'} />
           </TouchableOpacity>
         </View>
 
@@ -374,6 +413,32 @@ const ProfileScreen = () => {
             <Text style={styles.emptyTitle}>Gizli videoların</Text>
             <Text style={styles.emptyDesc}>Buradaki videoları yalnızca sen görebilirsin.</Text>
           </View>
+        ) : activeTab === 'saved' ? (
+          savedLoading ? (
+            <View style={styles.loadingWrap}><ActivityIndicator color="#fff" /></View>
+          ) : savedVideos.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="bookmark-outline" size={40} color="rgba(255,255,255,0.35)" />
+              <Text style={styles.emptyTitle}>Kaydedilenler</Text>
+              <Text style={styles.emptyDesc}>Kaydettiğin videolar burada görünecek.</Text>
+            </View>
+          ) : (
+            <View style={styles.grid}>
+              {savedVideos.map((v, i) => (
+                <TouchableOpacity
+                  key={v.id}
+                  style={[styles.gridItem, (i % 3 === 2) && { marginRight: 0 }]}
+                  onPress={() => (v.mediaUrl || v.videoUrl) ? setSavedViewerIndex(i) : null}
+                >
+                  <GridThumb uri={thumbUri(v)} fallback={deriveVideoThumbnail(v.mediaUrl || v.videoUrl)} />
+                  <View style={styles.thumbOverlay}>
+                    <Ionicons name="play-outline" size={14} color="#fff" />
+                    <Text style={styles.thumbViews}>{formatCount(v.viewsCount || 0)}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )
         ) : activeTab === 'liked' ? (
           likedLoading ? (
             <View style={styles.loadingWrap}><ActivityIndicator color="#fff" /></View>

@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike, recordVideoView } from '../services/videos';
+import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike, recordVideoView, toggleVideoSave } from '../services/videos';
 
 const { width, height } = Dimensions.get('window');
 
@@ -30,7 +30,7 @@ const normalize = (video) => {
   const user = video?.user || {
     username: video?.username ? `@${String(video.username).replace(/^@/, '')}` : '@kullanici',
     displayName: video?.displayName || '',
-    avatar: video?.avatar || 'https://i.pravatar.cc/150?img=12',
+    avatar: video?.avatar || null,
     isVerified: false,
     isFollowing: false,
   };
@@ -41,12 +41,12 @@ const normalize = (video) => {
   };
   const music = video?.music || {
     title: `Orijinal ses - ${String(user.username || '').replace(/^@/, '') || 'ruffs'}`,
-    cover: user.avatar,
+    cover: user.avatar || null,
   };
   return { mediaType, source, thumb, user, stats, music, caption: video?.caption || '' };
 };
 
-const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged }) => {
+const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged, onSaveChanged }) => {
   const n = useMemo(() => normalize(video), [video]);
   const isFocused = useIsFocused();
   const [liked, setLiked] = useState(!!video?.isLiked);
@@ -55,9 +55,11 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   const [viewsCount, setViewsCount] = useState(typeof (video?.viewsCount ?? video?.stats?.views) === 'number' ? (video?.viewsCount ?? video?.stats?.views) : 0);
   const viewedRef = useRef(false);
   const [saved, setSaved] = useState(!!video?.isBookmarked);
+  const [saving, setSaving] = useState(false);
   const [following, setFollowing] = useState(!!n.user?.isFollowing);
 
   useEffect(() => { setLiked(!!video?.isLiked); }, [video?.id, video?.isLiked]);
+  useEffect(() => { setSaved(!!video?.isBookmarked); }, [video?.id, video?.isBookmarked]);
   useEffect(() => {
     const lc = video?.likesCount ?? video?.stats?.likes;
     if (typeof lc === 'number') setLikesCount(lc);
@@ -97,6 +99,23 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
     }
   };
 
+  const handleSave = async () => {
+    if (saving || !video?.id) return;
+    const prev = saved;
+    const next = !prev;
+    setSaved(next);
+    setSaving(true);
+    try {
+      const res = await toggleVideoSave(video.id);
+      setSaved(res.saved);
+      onSaveChanged?.({ videoId: video.id, saved: res.saved });
+    } catch (e) {
+      setSaved(prev);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const player = useVideoPlayer(n.mediaType === 'video' ? n.source : null, (p) => {
     p.loop = true;
   });
@@ -127,7 +146,11 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
       {/* Sağ aksiyon sütunu */}
       <View style={styles.actions}>
         <View style={styles.avatarWrap}>
-          <Image source={{ uri: n.user.avatar }} style={styles.avatar} />
+          {n.user.avatar ? (
+            <Image source={{ uri: n.user.avatar }} style={styles.avatar} />
+          ) : (
+            <View style={[styles.avatar, styles.avatarPlaceholder]} />
+          )}
           {!following && (
             <TouchableOpacity
               style={styles.followBadge}
@@ -136,11 +159,6 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
               <Ionicons name="add" size={14} color="#fff" />
             </TouchableOpacity>
           )}
-        </View>
-
-        <View style={styles.actionBtn}>
-          <Ionicons name="play-outline" size={30} color="#fff" />
-          <Text style={styles.actionText}>{formatCount(viewsCount)}</Text>
         </View>
 
         <TouchableOpacity style={styles.actionBtn} onPress={handleLike} disabled={liking}>
@@ -157,7 +175,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
           <Text style={styles.actionText}>{formatCount(n.stats.comments)}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.actionBtn} onPress={() => setSaved(!saved)}>
+        <TouchableOpacity style={styles.actionBtn} onPress={handleSave} disabled={saving}>
           <Ionicons
             name={saved ? 'bookmark' : 'bookmark-outline'}
             size={32}

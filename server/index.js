@@ -215,6 +215,39 @@ app.post('/uploads/video', (req, res) => {
   });
 });
 
+app.post('/videos/save', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+    if (!admin) return res.status(503).json({ error: 'Sunucu yapılandırması eksik (admin)' });
+
+    const { videoId } = req.body || {};
+    if (!videoId || typeof videoId !== 'string') return res.status(400).json({ error: 'videoId gerekli' });
+
+    const db = admin.firestore();
+    const saveId = `${videoId}_${uidInfo.uid}`;
+    const saveRef = db.doc(`saves/${saveId}`);
+    const videoRef = db.doc(`videos/${videoId}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const [saveSnap, videoSnap] = await Promise.all([tx.get(saveRef), tx.get(videoRef)]);
+      if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
+      if (saveSnap.exists) {
+        tx.delete(saveRef);
+        return { saved: false };
+      } else {
+        tx.set(saveRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+        return { saved: true };
+      }
+    });
+
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e?.message || 'Kaydetme işlemi başarısız' });
+  }
+});
+
 app.post('/videos/view', async (req, res) => {
   try {
     let uidInfo;

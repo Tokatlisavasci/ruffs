@@ -421,3 +421,57 @@ export async function recordVideoView(videoId) {
     return null;
   }
 }
+
+
+export async function toggleVideoSave(videoId) {
+  const headers = await getSignHeaders();
+  const r = await withTimeout(
+    fetch(`${API_BASE_URL}/videos/save`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ videoId }),
+    }),
+    15000,
+    'Kaydetme isteği zaman aşımına uğradı.'
+  );
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data?.ok) throw new Error(data?.error || `Kaydetme başarısız (HTTP ${r.status})`);
+  return { saved: !!data.saved };
+}
+
+export async function fetchMySavedIds(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return new Set();
+  try {
+    const q = query(collection(db, 'saves'), where('uid', '==', uid));
+    const snap = await getDocs(q);
+    const ids = new Set();
+    snap.forEach((d) => { const vid = d.data()?.videoId; if (vid) ids.add(vid); });
+    return ids;
+  } catch (e) {
+    console.warn('fetchMySavedIds failed', e?.message || e);
+    return new Set();
+  }
+}
+
+export async function fetchSavedVideos(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return [];
+  try {
+    const q = query(collection(db, 'saves'), where('uid', '==', uid));
+    const snap = await getDocs(q);
+    const saves = [];
+    snap.forEach((d) => saves.push({ id: d.id, ...d.data() }));
+    saves.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    const out = [];
+    for (const sv of saves) {
+      if (!sv.videoId) continue;
+      try {
+        const vs = await getDoc(doc(db, 'videos', sv.videoId));
+        if (vs.exists()) out.push({ id: vs.id, ...vs.data(), isBookmarked: true });
+      } catch {}
+    }
+    return out;
+  } catch (e) {
+    console.warn('fetchSavedVideos failed', e?.message || e);
+    return [];
+  }
+}

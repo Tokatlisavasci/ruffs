@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
-import { fetchFeedVideos, fetchMyLikedIds } from '../services/videos';
+import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
 
@@ -22,6 +22,7 @@ const HomeScreen = () => {
   const navigation = useNavigation();
   const { user } = useAuth();
   const [likedIds, setLikedIds] = useState(new Set());
+  const [savedIds, setSavedIds] = useState(new Set());
   const [activeTab, setActiveTab] = useState('foryou');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [feed, setFeed] = useState([]);
@@ -33,12 +34,14 @@ const HomeScreen = () => {
   const load = async () => {
     setError(null);
     try {
-      const [items, ids] = await Promise.all([
+      const [items, ids, sids] = await Promise.all([
         fetchFeedVideos(),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
+        user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
       ]);
       setLikedIds(ids || new Set());
-      setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id) })));
+      setSavedIds(sids || new Set());
+      setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id) })));
     } catch (e) {
       const code = String(e?.code || '');
       if (code.includes('permission-denied')) setError('Videolar yüklenemedi (izin). Firestore "videos" kurallarını kontrol edin.');
@@ -62,6 +65,11 @@ const HomeScreen = () => {
     setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isLiked: liked, likesCount, stats: { ...(v.stats||{}), likes: likesCount } } : v)));
   };
 
+  const handleSaveChanged = ({ videoId, saved }) => {
+    setSavedIds((prev) => { const n = new Set(prev); saved ? n.add(videoId) : n.delete(videoId); return n; });
+    setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isBookmarked: saved } : v)));
+  };
+
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     if (viewableItems.length > 0) {
       setCurrentIndex(viewableItems[0].index ?? 0);
@@ -69,7 +77,7 @@ const HomeScreen = () => {
   }).current;
 
   const renderItem = useCallback(
-    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex}  onLikeChanged={handleLikeChanged} />,
+    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex}  onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} />,
     [currentIndex]
   );
 

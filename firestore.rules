@@ -36,6 +36,12 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
+    // Kaydedilenler: okuma sadece sahibi, yazma sunucu (admin) üzerinden.
+    match /saves/{saveId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
     // Varsayılan: kapalı
     match /{document=**} {
       allow read, write: if false;
