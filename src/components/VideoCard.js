@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import {
   View,
@@ -52,6 +52,7 @@ const normalize = (video) => {
 const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged, onSaveChanged, onFollowChanged }) => {
   const n = useMemo(() => normalize(video), [video]);
   const isFocused = useIsFocused();
+  const navigation = useNavigation();
   const { user: me, refreshUser } = useAuth();
   const [liked, setLiked] = useState(!!video?.isLiked);
   const [likesCount, setLikesCount] = useState(typeof (video?.likesCount ?? video?.stats?.likes) === 'number' ? (video?.likesCount ?? video?.stats?.likes) : 0);
@@ -133,6 +134,15 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
 
   const authorUid = n.user?.uid || video?.uid;
   const canFollow = !!authorUid && authorUid !== me?.id;
+  const openProfile = () => {
+    if (!authorUid) return;
+    const params = { userId: authorUid };
+    const nav = navigation;
+    try { nav.navigate('UserProfile', params); return; } catch {}
+    try { nav.getParent()?.navigate('UserProfile', params); return; } catch {}
+    try { nav.getParent()?.getParent()?.navigate('UserProfile', params); return; } catch {}
+    try { nav.push?.('UserProfile', params); } catch {}
+  };
   const handleFollow = async () => {
     if (!canFollow || followBusy) return;
     const prev = following;
@@ -180,11 +190,13 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
       {/* Sağ aksiyon sütunu */}
       <View style={styles.actions}>
         <View style={styles.avatarWrap}>
-          {n.user.avatar ? (
-            <Image source={{ uri: n.user.avatar }} style={styles.avatar} />
-          ) : (
-            <View style={[styles.avatar, styles.avatarPlaceholder]} />
-          )}
+          <TouchableOpacity onPress={openProfile} activeOpacity={0.85} disabled={!authorUid} hitSlop={{top:6,bottom:6,left:6,right:6}}>
+            {n.user.avatar ? (
+              <Image source={{ uri: n.user.avatar }} style={styles.avatar} />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder]} />
+            )}
+          </TouchableOpacity>
           {canFollow ? (
             <TouchableOpacity
               style={[styles.followBadge, following && styles.followBadgeOn]}
@@ -238,10 +250,12 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
 
       {/* Alt bilgi */}
       <View style={styles.bottomInfo}>
-        <Text style={styles.username}>
-          {n.user.username}
-          {n.user.isVerified ? ' ' : ''}
-        </Text>
+        <TouchableOpacity onPress={openProfile} disabled={!authorUid} activeOpacity={0.8}>
+          <Text style={styles.username}>
+            {n.user.username}
+            {n.user.isVerified ? ' ' : ''}
+          </Text>
+        </TouchableOpacity>
         {n.caption ? (
           <Text style={styles.caption} numberOfLines={2}>
             {n.caption}

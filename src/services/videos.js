@@ -154,20 +154,21 @@ async function uploadToCloudinary({ uri, sign, mediaType, mimeType }) {
 }
 
 
-async function uploadVideoToLoopsServer({ uri, caption, mediaType, mimeType }) {
+async function uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType }) {
+  const mt = mediaType === 'image' ? 'image' : 'video';
   const form = new FormData();
   form.append('description', String(caption || '').slice(0, 200));
   form.append('video', {
     uri,
-    name: guessName(uri, mediaType) || 'upload.mp4',
-    type: mimeType || 'video/mp4',
+    name: guessName(uri, mt) || (mt === 'image' ? 'upload.jpg' : 'upload.mp4'),
+    type: mimeType || guessType(uri, mt),
   });
   const headers = await getSignHeaders(); // Authorization: Bearer <idToken>
   const data = await uploadMultipartXHR(`${API_BASE_URL}/uploads/video`, form, {
     timeoutMs: 180000,
     headers,
   });
-  if (!data?.mediaUrl && !data?.playbackUrl) throw new Error('Loops yanıtından video URL’si alınamadı.');
+  if (!data?.mediaUrl && !data?.playbackUrl) throw new Error(mt === 'image' ? 'Loops yanıtından fotoğraf URL’si alınamadı.' : 'Loops yanıtından video URL’si alınamadı.');
   return data;
 }
 
@@ -178,42 +179,53 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
 
   const mediaType = inferMediaType({ uri, mimeType, explicit: explicitType });
 
-  // Videolar: loops.video (sunucu üzerinden, token sunucuda). Görseller: mevcut Cloudinary akışı.
-  if (mediaType === 'video') {
+  // Videolar ve (varsa) fotoğraflar: loops.video (sunucu üzerinden). Fotoğraf Loops'ta desteklenmezse Cloudinary'e düşer.
+  if (mediaType === 'video' || mediaType === 'image') {
     let up;
+    let loopsErr = null;
     try {
-      up = await uploadVideoToLoopsServer({ uri, caption, mediaType, mimeType });
+      up = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
     } catch (e) {
-      if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
-      throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
+      loopsErr = e;
+      if (mediaType === 'video') {
+        if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
+        throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
+      }
+      // image: Loops kabul etmediyse/başarısızsa Cloudinary fallback dene
     }
-    const mediaUrl = up.playbackUrl || up.mediaUrl;
-    const thumb = up.thumbnailUrl || deriveVideoThumbnail(mediaUrl) || mediaUrl;
-    const docData = {
-      uid: user.id,
-      username: user.username || '',
-      displayName: user.displayName || '',
-      avatar: user.avatar || null,
-      mediaType: 'video',
-      mediaUrl,
-      videoUrl: mediaUrl,
-      thumbnailUrl: thumb,
-      provider: up.provider || 'loops',
-      loopsId: up.loopsId || null,
-      loopsUrl: up.loopsUrl || null,
-      caption: String(caption || '').trim().slice(0, 220),
-      likesCount: 0,
-      commentsCount: 0,
-      sharesCount: 0,
-      savesCount: 0,
-      viewsCount: 0,
-      createdAt: serverTimestamp(),
-    };
-    const ref = await addDoc(collection(db, 'videos'), docData);
-    return { id: ref.id, ...docData, createdAt: new Date().toISOString() };
+    if (up) {
+      const mediaUrl = up.playbackUrl || up.mediaUrl;
+      const thumb = up.thumbnailUrl || (mediaType === 'image' ? mediaUrl : deriveVideoThumbnail(mediaUrl) || mediaUrl);
+      const docData = {
+        uid: user.id,
+        username: user.username || '',
+        displayName: user.displayName || '',
+        avatar: user.avatar || null,
+        mediaType,
+        mediaUrl,
+        videoUrl: mediaUrl,
+        thumbnailUrl: thumb || mediaUrl,
+        provider: up.provider || 'loops',
+        loopsId: up.loopsId || null,
+        loopsUrl: up.loopsUrl || null,
+        caption: String(caption || '').trim().slice(0, 220),
+        likesCount: 0,
+        commentsCount: 0,
+        sharesCount: 0,
+        savesCount: 0,
+        viewsCount: 0,
+        createdAt: serverTimestamp(),
+      };
+      const ref = await addDoc(collection(db, 'videos'), docData);
+      return { id: ref.id, ...docData, createdAt: new Date().toISOString() };
+    }
+    // fotoğraf Loops başarısız -> Cloudinary fallback; Loops hatasını sakla
+    if (mediaType === 'image' && loopsErr) {
+      try { console.warn('Loops image upload failed, trying Cloudinary fallback', loopsErr?.message); } catch {}
+    }
   }
 
-  // (Eski) Cloudinary imzalı yükleme — görseller için; şu an opsiyonel/ertelenmiş.
+  // Cloudinary imzalı yükleme (görseller için fallback).
   let sign;
   try {
     const r = await withTimeout(
@@ -506,5 +518,18 @@ export async function fetchMyFollowingIds(uid) {
   } catch (e) {
     console.warn('fetchMyFollowingIds failed', e?.message || e);
     return new Set();
+  }
+}
+
+
+export async function fetchUserProfile(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return null;
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (!snap.exists()) return null;
+    return { id: snap.id, ...snap.data() };
+  } catch (e) {
+    console.warn('fetchUserProfile failed', e?.message || e);
+    return null;
   }
 }

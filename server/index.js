@@ -28,7 +28,7 @@ const multer = require('multer');
 
 const uploadMw = multer({
   dest: path.join(os.tmpdir(), 'ruffs-uploads'),
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB; Loops instance limiti ayrıca uygulanır
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
 });
 
 function loopsConfig() {
@@ -87,9 +87,12 @@ async function findUploadedLoopsVideo({ base, token, description, attempts = 12,
 async function uploadToLoops({ filePath, filename, mimeType, description }) {
   const cfg = loopsConfig();
   if (!cfg) throw Object.assign(new Error('Loops yapılandırılmadı (LOOPS_ACCESS_TOKEN).'), { status: 503 });
+  const isImage = /^image//i.test(String(mimeType || ''));
+  const fallbackType = isImage ? 'image/jpeg' : 'video/mp4';
+  const fallbackName = isImage ? 'upload.jpg' : 'upload.mp4';
   const buf = fs.readFileSync(filePath);
   const form = new FormData();
-  form.append('video', new Blob([buf], { type: mimeType || 'video/mp4' }), filename || 'upload.mp4');
+  form.append('video', new Blob([buf], { type: mimeType || fallbackType }), filename || fallbackName);
   if (description) form.append('description', String(description).slice(0, 200));
   const r = await fetch(`${cfg.base}/api/v1/studio/upload`, {
     method: 'POST',
@@ -98,7 +101,8 @@ async function uploadToLoops({ filePath, filename, mimeType, description }) {
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const msg = data?.error || data?.message || (typeof data === 'string' ? data : null) || `Loops yükleme hatası (${r.status})`;
+    const raw = data?.error || data?.message || (typeof data === 'string' ? data : null);
+    const msg = (typeof raw === 'object' ? (raw?.message || JSON.stringify(raw)) : raw) || `Loops yükleme hatası (${r.status})`;
     throw Object.assign(new Error(msg), { status: r.status, data });
   }
   return data;
@@ -168,20 +172,23 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/uploads/video', (req, res) => {
-  uploadMw.single('video')(req, res, async (merr) => {
-    const tmp = req.file?.path;
+  uploadMw.fields([{ name: 'video', maxCount: 1 }, { name: 'image', maxCount: 1 }, { name: 'file', maxCount: 1 }])(req, res, async (merr) => {
+    const f = req.files?.video?.[0] || req.files?.image?.[0] || req.files?.file?.[0] || req.file || null;
+    const tmp = f?.path;
     try {
-      if (merr) return res.status(400).json({ error: merr.message || 'Video alınamadı' });
+      if (merr) return res.status(400).json({ error: merr.message || 'Medya alınamadı' });
       let uidInfo;
       try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
       if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
-      if (!req.file) return res.status(400).json({ error: 'video dosyası gerekli (multipart alan adı: video)' });
+      if (!f) return res.status(400).json({ error: 'Medya dosyası gerekli (multipart: video, image veya file)' });
 
       const caption = req.body?.description || req.body?.caption || '';
+      const mimeType = f.mimetype || '';
+      const isImage = /^image//i.test(mimeType) || /.(jpe?g|png|webp|heic|heif|gif)$/i.test(String(f.originalname || ''));
       const data = await uploadToLoops({
-        filePath: req.file.path,
-        filename: req.file.originalname || 'upload.mp4',
-        mimeType: req.file.mimetype || 'video/mp4',
+        filePath: f.path,
+        filename: f.originalname || (isImage ? 'upload.jpg' : 'upload.mp4'),
+        mimeType: mimeType || (isImage ? 'image/jpeg' : 'video/mp4'),
         description: caption,
       });
       let picked = pickLoopsMedia(data);
@@ -199,7 +206,8 @@ app.post('/uploads/video', (req, res) => {
       }
       if (!picked.mediaUrl) {
         try { console.error('loops upload: media url missing', JSON.stringify({ keys: Object.keys(data||{}), data }).slice(0, 6000)); } catch {}
-        return res.status(502).json({ error: picked.processing ? 'Video Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : 'Loops videoyu aldı ancak işlenmesi/URL oluşması zaman alıyor olabilir. 1-2 dakika sonra profilden kontrol et veya tekrar dene.', raw: data });
+        const isImg = /^image//i.test(f?.mimetype || '');
+        return res.status(502).json({ error: picked.processing ? 'Medya Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : (isImg ? 'Loops bu fotoğrafı kabul etmedi veya URL henüz oluşmadı. Fotoğraf yükleme Loops tarafından desteklenmiyor olabilir.' : 'Loops videoyu aldı ancak işlenmesi/URL oluşması zaman alıyor olabilir. 1-2 dakika sonra profilden kontrol et veya tekrar dene.'), raw: data });
       }
       return res.json({
         provider: 'loops',

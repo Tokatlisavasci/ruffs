@@ -13,6 +13,7 @@ import InboxScreen from '../screens/InboxScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import CameraPreviewTestScreen from '../screens/CameraPreviewTestScreen';
 import EditProfileScreen from '../screens/EditProfileScreen';
+import UserProfileScreen from '../screens/UserProfileScreen';
 import LoginScreen from '../screens/LoginScreen';
 import RegisterScreen from '../screens/RegisterScreen';
 
@@ -48,6 +49,7 @@ const MainStack = () => (
     <Stack.Screen name="MainTabs" component={MainTabs} />
     <Stack.Screen name="CameraPreviewTest" component={CameraPreviewTestScreen} />
     <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+    <Stack.Screen name="UserProfile" component={UserProfileScreen} />
   </Stack.Navigator>
 );
 
