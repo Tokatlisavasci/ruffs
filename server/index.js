@@ -60,14 +60,19 @@ async function uploadToLoops({ filePath, filename, mimeType, description }) {
 
 function pickLoopsMedia(data) {
   // Studio/upload veya video resource farklı şekillerde dönebilir
-  const root = data?.data && typeof data.data === 'object' && !Array.isArray(data.data) ? data.data : data;
-  const media = root?.media || data?.media || {};
-  const src = media.src_url || media.url || root?.src_url || root?.video_url || root?.url;
-  const hls = media.hls_url || root?.hls_url || null;
-  const thumb = media.thumbnail || root?.thumbnail || root?.poster || null;
-  const id = root?.id || root?.hid || data?.id || null;
-  const loopsUrl = root?.url && /^https?:/i.test(root.url) ? root.url : (root?.shortcode ? `${(process.env.LOOPS_BASE_URL || 'https://loops.video').replace(/\/$/, '')}/v/${root.shortcode}` : null);
-  return { mediaUrl: src || hls, playbackUrl: src || hls, hlsUrl: hls, thumbnailUrl: thumb, loopsId: id, loopsUrl };
+  const root = (data?.data && typeof data.data === 'object' && !Array.isArray(data.data))
+    ? data.data
+    : (Array.isArray(data?.data) ? data.data[0] : (data?.video || data));
+  const media = root?.media || data?.media || root?.video || {};
+  const src = media.src_url || media.url || media.file_url || root?.src_url || root?.video_url || root?.file_url || root?.preview_url
+    || (typeof root?.url === 'string' && /.(mp4|m3u8|mov|webm)(?|$)/i.test(root.url) ? root.url : null);
+  const hls = media.hls_url || root?.hls_url || media.stream_url || root?.stream_url || null;
+  const thumb = media.thumbnail || media.thumbnail_url || media.preview_url || root?.thumbnail || root?.thumbnail_url || root?.poster || root?.preview_url || null;
+  const id = root?.id || root?.hid || root?.video_id || data?.id || null;
+  const loopsUrl = root?.url && /^https?:/i.test(root.url) && !/.(mp4|m3u8|mov|webm)(?|$)/i.test(root.url)
+    ? root.url
+    : (root?.shortcode ? `${(process.env.LOOPS_BASE_URL || 'https://loops.video').replace(//$/, '')}/v/${root.shortcode}` : null);
+  return { mediaUrl: src || hls, playbackUrl: src || hls, hlsUrl: hls, thumbnailUrl: thumb, loopsId: id, loopsUrl, processing: !!(root?.processing || root?.status === 'processing' || root?.state === 'processing') };
 }
 
 async function resolveUid(req) {
@@ -135,7 +140,8 @@ app.post('/uploads/video', (req, res) => {
       });
       const picked = pickLoopsMedia(data);
       if (!picked.mediaUrl) {
-        return res.status(502).json({ error: 'Loops yanıtından video URL’si alınamadı', raw: data });
+        try { console.error('loops upload: media url missing', JSON.stringify({ keys: Object.keys(data||{}), data }).slice(0, 6000)); } catch {}
+        return res.status(502).json({ error: picked.processing ? 'Video Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : 'Loops yanıtından video URL’si alınamadı', raw: data });
       }
       return res.json({
         provider: 'loops',
