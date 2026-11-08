@@ -107,6 +107,34 @@ async function uploadToLoops({ filePath, filename, mimeType, description }) {
   return data;
 }
 
+function imgbbKey() {
+  const k = process.env.IMGBB_API_KEY;
+  return k && String(k).trim() ? String(k).trim() : null;
+}
+
+async function uploadToImgbb({ filePath, mimeType, filename }) {
+  const key = imgbbKey();
+  if (!key) throw Object.assign(new Error('Fotoğraf yükleme yapılandırılmadı (IMGBB_API_KEY).'), { status: 503 });
+  const buf = fs.readFileSync(filePath);
+  const b64 = buf.toString('base64');
+  const body = new URLSearchParams();
+  body.set('image', b64);
+  if (filename) body.set('name', String(filename).replace(/.[^.]+$/, '').slice(0, 80));
+  const r = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(key)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data?.success) {
+    const msg = data?.error?.message || data?.status_txt || `imgbb yükleme hatası (${r.status})`;
+    throw Object.assign(new Error(msg), { status: r.status, data });
+  }
+  const url = data?.data?.display_url || data?.data?.url || data?.data?.image?.url;
+  if (!url) throw Object.assign(new Error('imgbb URL döndürmedi.'), { status: 502, data });
+  return { provider: 'imgbb', mediaUrl: url, thumbnailUrl: data?.data?.thumb?.url || url, raw: data.data };
+}
+
 function pickLoopsMedia(data) {
   // Studio/upload veya video resource farklı şekillerde dönebilir
   const root = (data?.data && typeof data.data === 'object' && !Array.isArray(data.data))

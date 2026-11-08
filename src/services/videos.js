@@ -128,9 +128,11 @@ async function uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType }) {
     timeoutMs: 180000,
     headers,
   });
-  if (!data?.mediaUrl && !data?.playbackUrl) throw new Error(mt === 'image' ? 'Loops yanıtından fotoğraf URL’si alınamadı.' : 'Loops yanıtından video URL’si alınamadı.');
+  if (!data?.mediaUrl && !data?.playbackUrl) throw new Error('Yükleme tamamlandı ancak medya URL’si alınamadı.');
   return data;
 }
+
+
 
 export async function uploadUserMedia({ uri, caption, user, mediaType: explicitType, mimeType }) {
   if (!isFirebaseConfigured || !db) throw new Error('Firebase yapılandırılmadı (EXPO_PUBLIC_FIREBASE_*).');
@@ -157,7 +159,7 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
     mediaUrl,
     videoUrl: mediaUrl,
     thumbnailUrl: thumb || mediaUrl,
-    provider: up.provider || 'loops',
+    provider: up.provider || (mediaType === 'video' ? 'loops' : 'upload'),
     loopsId: up.loopsId || null,
     loopsUrl: up.loopsUrl || null,
     caption: String(caption || '').trim().slice(0, 220),
@@ -212,6 +214,12 @@ export async function fetchFeedVideos() {
 export async function uploadMediaAsset({ uri, userId, mediaType = 'image', mimeType, caption = '' }) {
   if (!uri) throw new Error('Dosya seçilmedi');
   if (!userId) throw new Error('Oturum gerekli');
+  if (mediaType === 'image') {
+    const ext = (guessName(uri, 'image').split('.').pop() || 'jpg').toLowerCase();
+    const path = `avatars/${userId}/${Date.now()}.${ext}`;
+    const url = await uploadImageToFirebaseStorage({ uri, path, mimeType: mimeType || guessType(uri, 'image') });
+    return { url, publicId: null, raw: { provider: 'firebase-storage', path } };
+  }
   let data;
   try {
     data = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
