@@ -194,10 +194,27 @@ app.post('/uploads/video', (req, res) => {
       const caption = req.body?.description || req.body?.caption || '';
       const mimeType = f.mimetype || '';
       const isImage = /^image/i.test(mimeType) || /.(jpe?g|png|webp|heic|heif|gif)$/i.test(String(f.originalname || ''));
+      if (isImage) {
+        const img = await uploadToImgbb({
+          filePath: f.path,
+          filename: f.originalname || 'upload.jpg',
+          mimeType: mimeType || 'image/jpeg',
+        });
+        return res.json({
+          provider: img.provider || 'imgbb',
+          mediaUrl: img.mediaUrl,
+          thumbnailUrl: img.thumbnailUrl || img.mediaUrl,
+          playbackUrl: img.mediaUrl,
+          loopsId: null,
+          loopsUrl: null,
+          rawId: null,
+        });
+      }
+
       const data = await uploadToLoops({
         filePath: f.path,
-        filename: f.originalname || (isImage ? 'upload.jpg' : 'upload.mp4'),
-        mimeType: mimeType || (isImage ? 'image/jpeg' : 'video/mp4'),
+        filename: f.originalname || 'upload.mp4',
+        mimeType: mimeType || 'video/mp4',
         description: caption,
       });
       let picked = pickLoopsMedia(data);
@@ -215,8 +232,7 @@ app.post('/uploads/video', (req, res) => {
       }
       if (!picked.mediaUrl) {
         try { console.error('loops upload: media url missing', JSON.stringify({ keys: Object.keys(data||{}), data }).slice(0, 6000)); } catch {}
-        const isImg = /^image/i.test(f?.mimetype || '');
-        return res.status(502).json({ error: picked.processing ? 'Medya Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : (isImg ? 'Loops bu fotoğrafı kabul etmedi veya URL henüz oluşmadı. Fotoğraf yükleme Loops tarafından desteklenmiyor olabilir.' : 'Loops videoyu aldı ancak işlenmesi/URL oluşması zaman alıyor olabilir. 1-2 dakika sonra profilden kontrol et veya tekrar dene.'), raw: data });
+        return res.status(502).json({ error: picked.processing ? 'Video Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : 'Loops videoyu aldı ancak işlenmesi/URL oluşması zaman alıyor olabilir. 1-2 dakika sonra profilden kontrol et veya tekrar dene.', raw: data });
       }
       return res.json({
         provider: 'loops',

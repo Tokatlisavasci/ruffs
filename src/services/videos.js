@@ -214,12 +214,6 @@ export async function fetchFeedVideos() {
 export async function uploadMediaAsset({ uri, userId, mediaType = 'image', mimeType, caption = '' }) {
   if (!uri) throw new Error('Dosya seçilmedi');
   if (!userId) throw new Error('Oturum gerekli');
-  if (mediaType === 'image') {
-    const ext = (guessName(uri, 'image').split('.').pop() || 'jpg').toLowerCase();
-    const path = `avatars/${userId}/${Date.now()}.${ext}`;
-    const url = await uploadImageToFirebaseStorage({ uri, path, mimeType: mimeType || guessType(uri, 'image') });
-    return { url, publicId: null, raw: { provider: 'firebase-storage', path } };
-  }
   let data;
   try {
     data = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
