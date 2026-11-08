@@ -24,7 +24,7 @@ const TOP = Platform.OS === 'ios' ? 54 : (StatusBar.currentHeight || 0) + 10;
 function friendlyError(e) {
   const msg = String(e?.message || '');
   if (msg.toLowerCase().includes('bağlanılamadı') || msg.toLowerCase().includes('network request failed')) {
-    return 'Yükleme sunucusuna bağlanılamadı. "tiktok-clone/server" çalışıyor mu ve cihaz aynı ağda mı? (Profil fotoğrafı Cloudinary ile yüklenir.)';
+    return 'Yükleme sunucusuna bağlanılamadı. "tiktok-clone/server" çalışıyor mu ve cihaz aynı ağda mı?';
   }
   if (msg.includes('permission-denied') || String(e?.code || '').includes('permission-denied')) {
     return 'İzin hatası. Firestore "users" kurallarını kontrol edin.';

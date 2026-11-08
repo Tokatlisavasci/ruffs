@@ -65,22 +65,12 @@ function guessName(uri, mediaType) {
 
 export function deriveVideoPlaybackUrl(url) {
   if (!url || typeof url !== 'string') return null;
-  // Cloudinary: mobil için optimize teslim (boyut/bitrate düşür, takılmayı azalt).
-  if (url.includes('res.cloudinary.com') && url.includes('/video/upload/')) {
-    if (url.includes('/video/upload/q_auto') || url.includes('/video/upload/f_auto') || url.includes('/video/upload/w_')) return url;
-    return url.replace('/video/upload/', '/video/upload/q_auto,f_mp4,vc_h264,w_720/');
-  }
   return url;
 }
 
 export function deriveVideoThumbnail(url) {
   if (!url || typeof url !== 'string') return null;
-  // Cloudinary video -> poster frame (jpg). Eski kayıtlarda thumbnailUrl=mp4 olabilir.
-  if (url.includes('res.cloudinary.com') && url.includes('/video/upload/')) {
-    return url.replace('/video/upload/', '/video/upload/so_0/f_jpg/').replace(/\.[^./?#]+([?#]|$)/, '.jpg$1');
-  }
-  // Görsel ise kendisi önizleme olarak kullanılabilir.
-  if (url.includes('/image/upload/') || IMAGE_EXT.test(url.split('?')[0])) return url;
+  if (IMAGE_EXT.test(url.split('?')[0])) return url;
   return url;
 }
 
@@ -121,38 +111,6 @@ function uploadMultipartXHR(url, form, { timeoutMs = 10 * 60 * 1000, headers } =
   });
 }
 
-async function uploadToCloudinary({ uri, sign, mediaType, mimeType }) {
-  const form = new FormData();
-  if (Platform.OS === 'web') {
-    const blobRes = await withTimeout(fetch(uri), 30000, 'Dosya okunamadı (zaman aşımı).');
-    const blob = await blobRes.blob();
-    form.append('file', blob, guessName(uri, mediaType));
-  } else {
-    // React Native: XHR + {uri,name,type} dosya parçası.
-    form.append('file', {
-      uri,
-      type: mimeType || guessType(uri, mediaType),
-      name: guessName(uri, mediaType),
-    });
-  }
-  form.append('api_key', sign.apiKey);
-  form.append('timestamp', String(sign.timestamp));
-  form.append('signature', sign.signature);
-  form.append('folder', sign.folder);
-
-  if (Platform.OS === 'web') {
-    const upRes = await withTimeout(
-      fetch(sign.uploadUrl, { method: 'POST', body: form }),
-      10 * 60 * 1000,
-      'Yükleme zaman aşımına uğradı. Bağlantınızı kontrol edip tekrar deneyin.'
-    );
-    const upData = await upRes.json().catch(() => ({}));
-    if (!upRes.ok) throw new Error(upData?.error?.message || 'Cloudinary yüklemesi başarısız.');
-    return upData;
-  }
-  return await uploadMultipartXHR(sign.uploadUrl, form, { timeoutMs: 10 * 60 * 1000 });
-}
-
 
 async function uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType }) {
   const mt = mediaType === 'image' ? 'image' : 'video';
@@ -178,76 +136,15 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
   if (!uri) throw new Error('Medya seçilmedi');
 
   const mediaType = inferMediaType({ uri, mimeType, explicit: explicitType });
-
-  // Videolar ve (varsa) fotoğraflar: loops.video (sunucu üzerinden). Fotoğraf Loops'ta desteklenmezse Cloudinary'e düşer.
-  if (mediaType === 'video' || mediaType === 'image') {
-    let up;
-    let loopsErr = null;
-    try {
-      up = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
-    } catch (e) {
-      loopsErr = e;
-      if (mediaType === 'video') {
-        if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
-        throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
-      }
-      // image: Loops kabul etmediyse/başarısızsa Cloudinary fallback dene
-    }
-    if (up) {
-      const mediaUrl = up.playbackUrl || up.mediaUrl;
-      const thumb = up.thumbnailUrl || (mediaType === 'image' ? mediaUrl : deriveVideoThumbnail(mediaUrl) || mediaUrl);
-      const docData = {
-        uid: user.id,
-        username: user.username || '',
-        displayName: user.displayName || '',
-        avatar: user.avatar || null,
-        mediaType,
-        mediaUrl,
-        videoUrl: mediaUrl,
-        thumbnailUrl: thumb || mediaUrl,
-        provider: up.provider || 'loops',
-        loopsId: up.loopsId || null,
-        loopsUrl: up.loopsUrl || null,
-        caption: String(caption || '').trim().slice(0, 220),
-        likesCount: 0,
-        commentsCount: 0,
-        sharesCount: 0,
-        savesCount: 0,
-        viewsCount: 0,
-        createdAt: serverTimestamp(),
-      };
-      const ref = await addDoc(collection(db, 'videos'), docData);
-      return { id: ref.id, ...docData, createdAt: new Date().toISOString() };
-    }
-    // fotoğraf Loops başarısız -> Cloudinary fallback; Loops hatasını sakla
-    if (mediaType === 'image' && loopsErr) {
-      try { console.warn('Loops image upload failed, trying Cloudinary fallback', loopsErr?.message); } catch {}
-    }
-  }
-
-  // Cloudinary imzalı yükleme (görseller için fallback).
-  let sign;
+  let up;
   try {
-    const r = await withTimeout(
-      fetch(`${API_BASE_URL}/uploads/sign`, {
-        method: 'POST',
-        headers: await getSignHeaders(),
-        body: JSON.stringify({ uid: user.id, resourceType: mediaType }),
-      }),
-      15000,
-      'İmzalama sunucusu yanıt vermedi. Sunucu çalışıyor mu ve cihaz ağa erişebiliyor mu?'
-    );
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error || 'Yükleme hazırlanamadı');
-    sign = data;
+    up = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
   } catch (e) {
     if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
-    throw new Error('Yükleme sunucusuna bağlanılamadı. Cloudinary imzalama sunucusu/ayarları hazır mı?');
+    throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
   }
-
-  const upData = await uploadToCloudinary({ uri, sign, mediaType, mimeType });
-  const rawUrl = upData.secure_url || upData.url;
-  const mediaUrl = mediaType === 'video' ? (deriveVideoPlaybackUrl(rawUrl) || rawUrl) : rawUrl;
+  const mediaUrl = up.playbackUrl || up.mediaUrl;
+  const thumb = up.thumbnailUrl || (mediaType === 'image' ? mediaUrl : deriveVideoThumbnail(mediaUrl) || mediaUrl);
   if (!mediaUrl) throw new Error('Yükleme tamamlandı ancak medya URL’si alınamadı.');
   const docData = {
     uid: user.id,
@@ -257,8 +154,10 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
     mediaType,
     mediaUrl,
     videoUrl: mediaUrl,
-    thumbnailUrl: mediaType === 'video' ? (deriveVideoThumbnail(rawUrl) || rawUrl || mediaUrl) : mediaUrl,
-    cloudinaryPublicId: upData.public_id || null,
+    thumbnailUrl: thumb || mediaUrl,
+    provider: up.provider || 'loops',
+    loopsId: up.loopsId || null,
+    loopsUrl: up.loopsUrl || null,
     caption: String(caption || '').trim().slice(0, 220),
     likesCount: 0,
     commentsCount: 0,
@@ -308,32 +207,21 @@ export async function fetchFeedVideos() {
 }
 
 
-export async function uploadCloudinaryAsset({ uri, userId, mediaType = 'image', mimeType }) {
+export async function uploadMediaAsset({ uri, userId, mediaType = 'image', mimeType, caption = '' }) {
   if (!uri) throw new Error('Dosya seçilmedi');
   if (!userId) throw new Error('Oturum gerekli');
-  let sign;
+  let data;
   try {
-    const r = await withTimeout(
-      fetch(`${API_BASE_URL}/uploads/sign`, {
-        method: 'POST',
-        headers: await getSignHeaders(),
-        body: JSON.stringify({ uid: userId, resourceType: mediaType }),
-      }),
-      15000,
-      'İmzalama sunucusu yanıt vermedi. Bilgisayarda "tiktok-clone/server" çalışıyor mu ve cihaz aynı ağda mı?'
-    );
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error || 'Yükleme hazırlanamadı');
-    sign = data;
+    data = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
   } catch (e) {
     if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
-    throw new Error('Yükleme sunucusuna bağlanılamadı. "tiktok-clone/server" çalışıyor mu ve Cloudinary ayarları (server/.env) tamam mı?');
+    throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
   }
-  const upData = await uploadToCloudinary({ uri, sign, mediaType, mimeType });
-  const url = upData.secure_url || upData.url;
+  const url = data?.mediaUrl || data?.playbackUrl || data?.thumbnailUrl;
   if (!url) throw new Error('Yükleme tamamlandı ancak URL alınamadı.');
-  return { url, publicId: upData.public_id || null, raw: upData };
+  return { url, publicId: data?.loopsId || null, raw: data };
 }
+
 
 
 export async function deleteUserVideo({ videoId, loopsId, user }) {

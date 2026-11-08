@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const crypto = require('crypto');
 
 let admin = null;
 try { admin = require('firebase-admin'); } catch {}
@@ -149,26 +148,8 @@ app.use(express.json());
 
 const PORT = Number(process.env.PORT) || 4000;
 
-function cloudinaryConfig() {
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-  const apiKey = process.env.CLOUDINARY_API_KEY;
-  const apiSecret = process.env.CLOUDINARY_API_SECRET;
-  const folder = process.env.CLOUDINARY_FOLDER || 'ruffs';
-  if (!cloudName || !apiKey || !apiSecret) return null;
-  return { cloudName, apiKey, apiSecret, folder };
-}
-
-function signParams(paramsToSign, apiSecret) {
-  const sorted = Object.keys(paramsToSign)
-    .sort()
-    .map((k) => `${k}=${paramsToSign[k]}`)
-    .join('&');
-  return crypto.createHash('sha1').update(sorted + apiSecret).digest('hex');
-}
-
 app.get('/health', (req, res) => {
-  const cfg = cloudinaryConfig();
-  res.json({ ok: true, storageConfigured: !!cfg, provider: 'cloudinary', loopsConfigured: !!loopsConfig() });
+  res.json({ ok: true, provider: 'loops', loopsConfigured: !!loopsConfig() });
 });
 
 app.post('/uploads/video', (req, res) => {
@@ -426,44 +407,6 @@ app.post('/uploads/video/delete', async (req, res) => {
   }
 });
 
-app.post('/uploads/sign', async (req, res) => {
-  try {
-    const cfg = cloudinaryConfig();
-    if (!cfg) {
-      return res.status(503).json({
-        error: 'Cloudinary yapılandırılmadı. server/.env veya function secret olarak CLOUDINARY_* ekleyin.',
-      });
-    }
-    let uidInfo;
-    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
-    const { resourceType } = req.body || {};
-    if (!uidInfo?.uid) {
-      return res.status(400).json({ error: 'uid gerekli (veya geçerli oturum tokenı)' });
-    }
-    const kind = resourceType === 'image' ? 'image' : 'video';
-    const safeUid = String(uidInfo.uid).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || 'user';
-    const timestamp = Math.round(Date.now() / 1000);
-    const base = (cfg.folder || 'ruffs').replace(/\/(videos|images)\/?$/i, '');
-    const folder = `${base}/${kind === 'image' ? 'images' : 'videos'}/${safeUid}`;
-    const paramsToSign = { folder, timestamp };
-    const signature = signParams(paramsToSign, cfg.apiSecret);
-    res.json({
-      provider: 'cloudinary',
-      resourceType: kind,
-      cloudName: cfg.cloudName,
-      apiKey: cfg.apiKey,
-      timestamp,
-      folder,
-      signature,
-      uploadUrl: `https://api.cloudinary.com/v1_1/${cfg.cloudName}/${kind}/upload`,
-    });
-  } catch (e) {
-    console.error('sign error', e);
-    res.status(500).json({ error: 'Yükleme imzası oluşturulamadı' });
-  }
-});
-
 app.listen(PORT, () => {
-  const cfg = cloudinaryConfig();
-  console.log(`Ruffs upload API http://localhost:${PORT} (Cloudinary configured: ${!!cfg})`);
+  console.log(`Ruffs API http://localhost:${PORT} (Loops configured: ${!!loopsConfig()})`);
 });

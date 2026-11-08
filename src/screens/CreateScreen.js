@@ -47,7 +47,7 @@ function friendlyUploadError(e) {
   }
   if (code.includes('unauthenticated')) return 'Oturum gerekli. Lütfen tekrar giriş yapın.';
   if (msg.toLowerCase().includes('bağlanılamadı') || msg.toLowerCase().includes('network request failed')) {
-    return 'Yükleme sunucusuna bağlanılamadı. Bilgisayarda "tiktok-clone/server" çalışmalı ve Cloudinary ayarları (server/.env) girilmiş olmalı.';
+    return 'Yükleme sunucusuna bağlanılamadı. Bilgisayarda "tiktok-clone/server" çalışmalı ve EXPO_PUBLIC_SIGNING_API_URL doğru olmalı.';
   }
   if (msg.toLowerCase().includes('network')) return 'Ağ hatası. Bağlantınızı kontrol edin.';
   return e?.message || 'Yükleme başarısız. Lütfen tekrar deneyin.';

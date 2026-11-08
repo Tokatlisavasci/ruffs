@@ -8,7 +8,7 @@ import {
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db, isFirebaseConfigured } from '../config/firebase';
-import { uploadCloudinaryAsset } from '../services/videos';
+import { uploadMediaAsset } from '../services/videos';
 
 const AuthContext = createContext(null);
 
@@ -127,7 +127,7 @@ export function AuthProvider({ children }) {
     if (username != null) updates.username = String(username).trim().toLowerCase().replace(/\s+/g, '_').replace(/^@/, '');
     if (bio != null) updates.bio = String(bio).trim().slice(0, 150);
     if (avatarUri) {
-      const up = await uploadCloudinaryAsset({ uri: avatarUri, userId: uid, mediaType: 'image', mimeType: avatarMimeType || 'image/jpeg' });
+      const up = await uploadMediaAsset({ uri: avatarUri, userId: uid, mediaType: 'image', mimeType: avatarMimeType || 'image/jpeg' });
       updates.avatar = up.url;
     }
     const fbUpdates = {};
