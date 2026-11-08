@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserVideos, fetchLikedVideos, fetchSavedVideos, fetchMyLikedIds, fetchMySavedIds, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
+import { fetchUserVideos, fetchLikedVideos, fetchSavedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
 import VideoCard from '../components/VideoCard';
 
 const { height } = Dimensions.get('window');
@@ -167,8 +167,8 @@ const ProfileScreen = () => {
     if (!user?.id) return;
     setLikedLoading(true);
     try {
-      const items = await fetchLikedVideos(user.id);
-      setLikedVideos(items);
+      const [items, sIds, fIds] = await Promise.all([fetchLikedVideos(user.id), fetchMySavedIds(user.id), fetchMyFollowingIds(user.id)]);
+      setLikedVideos((items || []).map((v) => ({ ...v, isLiked: true, isBookmarked: sIds?.has?.(v.id), isFollowing: fIds?.has?.(v.uid) })));
     } catch {}
     finally { setLikedLoading(false); }
   }, [user?.id]);
@@ -177,8 +177,8 @@ const ProfileScreen = () => {
     if (!user?.id) return;
     setSavedLoading(true);
     try {
-      const items = await fetchSavedVideos(user.id);
-      setSavedVideos(items);
+      const [items, lIds, fIds] = await Promise.all([fetchSavedVideos(user.id), fetchMyLikedIds(user.id), fetchMyFollowingIds(user.id)]);
+      setSavedVideos((items || []).map((v) => ({ ...v, isBookmarked: true, isLiked: lIds?.has?.(v.id), isFollowing: fIds?.has?.(v.uid) })));
     } catch {}
     finally { setSavedLoading(false); }
   }, [user?.id]);
@@ -351,11 +351,11 @@ const ProfileScreen = () => {
           )}
           <View style={styles.stats}>
             <View style={styles.stat}>
-              <Text style={styles.statNum}>{formatCount(user.stats?.following)}</Text>
+              <Text style={styles.statNum}>{formatCount(user.following ?? user.stats?.following ?? 0)}</Text>
               <Text style={styles.statLabel}>Takip</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statNum}>{formatCount(user.stats?.followers)}</Text>
+              <Text style={styles.statNum}>{formatCount(user.followers ?? user.stats?.followers ?? 0)}</Text>
               <Text style={styles.statLabel}>Takipçi</Text>
             </View>
             <View style={styles.stat}>

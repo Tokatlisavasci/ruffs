@@ -42,6 +42,12 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // Takip ilişkileri: okuma takip eden kişi için, yazma sunucu (admin) üzerinden.
+    match /follows/{followId} {
+      allow read: if signedIn() && resource.data.followerId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
     // Varsayılan: kapalı
     match /{document=**} {
       allow read, write: if false;

@@ -14,7 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
-import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds } from '../services/videos';
+import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
 
@@ -23,6 +23,7 @@ const HomeScreen = () => {
   const { user } = useAuth();
   const [likedIds, setLikedIds] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
+  const [followingIds, setFollowingIds] = useState(new Set());
   const [activeTab, setActiveTab] = useState('foryou');
   const [currentIndex, setCurrentIndex] = useState(0);
   const [feed, setFeed] = useState([]);
@@ -34,14 +35,16 @@ const HomeScreen = () => {
   const load = async () => {
     setError(null);
     try {
-      const [items, ids, sids] = await Promise.all([
+      const [items, ids, sids, fids] = await Promise.all([
         fetchFeedVideos(),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
+        user?.id ? fetchMyFollowingIds(user.id) : Promise.resolve(new Set()),
       ]);
       setLikedIds(ids || new Set());
       setSavedIds(sids || new Set());
-      setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id) })));
+      setFollowingIds(fids || new Set());
+      setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id), isFollowing: fids?.has?.(v.uid || v.userId) })));
     } catch (e) {
       const code = String(e?.code || '');
       if (code.includes('permission-denied')) setError('Videolar yüklenemedi (izin). Firestore "videos" kurallarını kontrol edin.');
@@ -70,6 +73,11 @@ const HomeScreen = () => {
     setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isBookmarked: saved, ...(typeof savesCount === 'number' ? { savesCount, stats: { ...(v.stats||{}), saves: savesCount } } : {}) } : v)));
   };
 
+  const handleFollowChanged = ({ targetUid, following }) => {
+    setFollowingIds((prev) => { const n = new Set(prev); following ? n.add(targetUid) : n.delete(targetUid); return n; });
+    setFeed((prev) => prev.map((v) => ((v.uid || v.userId) === targetUid ? { ...v, isFollowing: following } : v)));
+  };
+
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     if (viewableItems.length > 0) {
       setCurrentIndex(viewableItems[0].index ?? 0);
@@ -77,7 +85,7 @@ const HomeScreen = () => {
   }).current;
 
   const renderItem = useCallback(
-    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex}  onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} />,
+    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex}  onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} onFollowChanged={handleFollowChanged} />,
     [currentIndex]
   );
 

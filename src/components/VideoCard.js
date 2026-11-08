@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useIsFocused } from '@react-navigation/native';
+import { useAuth } from '../context/AuthContext';
 import {
   View,
   Text,
@@ -10,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike, recordVideoView, toggleVideoSave } from '../services/videos';
+import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike, recordVideoView, toggleVideoSave, toggleFollow } from '../services/videos';
 
 const { width, height } = Dimensions.get('window');
 
@@ -27,12 +28,13 @@ const normalize = (video) => {
   const rawSource = video?.videoUri || video?.mediaUrl || video?.videoUrl || null;
   const source = mediaType === 'video' ? (deriveVideoPlaybackUrl(rawSource) || rawSource) : rawSource;
   const thumb = video?.thumbnail || video?.thumbnailUrl || (mediaType === 'video' && rawSource ? deriveVideoThumbnail(rawSource) : rawSource);
-  const user = video?.user || {
-    username: video?.username ? `@${String(video.username).replace(/^@/, '')}` : '@kullanici',
-    displayName: video?.displayName || '',
-    avatar: video?.avatar || null,
-    isVerified: false,
-    isFollowing: false,
+  const user = {
+    uid: video?.uid || video?.user?.uid || video?.userId || null,
+    username: video?.user?.username || (video?.username ? `@${String(video.username).replace(/^@/, '')}` : '@kullanici'),
+    displayName: video?.user?.displayName || video?.displayName || '',
+    avatar: video?.user?.avatar ?? video?.avatar ?? null,
+    isVerified: !!(video?.user?.isVerified),
+    isFollowing: !!(video?.isFollowing ?? video?.user?.isFollowing),
   };
   const stats = video?.stats || {
     likes: video?.likesCount ?? 0,
@@ -47,9 +49,10 @@ const normalize = (video) => {
   return { mediaType, source, thumb, user, stats, music, caption: video?.caption || '' };
 };
 
-const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged, onSaveChanged }) => {
+const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged, onSaveChanged, onFollowChanged }) => {
   const n = useMemo(() => normalize(video), [video]);
   const isFocused = useIsFocused();
+  const { user: me, refreshUser } = useAuth();
   const [liked, setLiked] = useState(!!video?.isLiked);
   const [likesCount, setLikesCount] = useState(typeof (video?.likesCount ?? video?.stats?.likes) === 'number' ? (video?.likesCount ?? video?.stats?.likes) : 0);
   const [liking, setLiking] = useState(false);
@@ -58,10 +61,12 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   const [saved, setSaved] = useState(!!video?.isBookmarked);
   const [saving, setSaving] = useState(false);
   const [savesCount, setSavesCount] = useState(typeof (video?.savesCount ?? video?.stats?.saves) === 'number' ? (video?.savesCount ?? video?.stats?.saves) : 0);
-  const [following, setFollowing] = useState(!!n.user?.isFollowing);
+  const [following, setFollowing] = useState(!!(video?.isFollowing ?? n.user?.isFollowing));
+  const [followBusy, setFollowBusy] = useState(false);
 
   useEffect(() => { setLiked(!!video?.isLiked); }, [video?.id, video?.isLiked]);
   useEffect(() => { setSaved(!!video?.isBookmarked); }, [video?.id, video?.isBookmarked]);
+  useEffect(() => { setFollowing(!!(video?.isFollowing ?? video?.user?.isFollowing)); }, [video?.id, video?.isFollowing, video?.user?.isFollowing, video?.uid]);
   useEffect(() => {
     const sc = video?.savesCount ?? video?.stats?.saves;
     if (typeof sc === 'number') setSavesCount(sc);
@@ -126,6 +131,25 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
     }
   };
 
+  const authorUid = n.user?.uid || video?.uid;
+  const canFollow = !!authorUid && authorUid !== me?.id;
+  const handleFollow = async () => {
+    if (!canFollow || followBusy) return;
+    const prev = following;
+    setFollowing(!prev);
+    setFollowBusy(true);
+    try {
+      const res = await toggleFollow(authorUid);
+      setFollowing(res.following);
+      onFollowChanged?.({ targetUid: authorUid, following: res.following, myFollowing: res.myFollowing });
+      refreshUser?.();
+    } catch (e) {
+      setFollowing(prev);
+    } finally {
+      setFollowBusy(false);
+    }
+  };
+
   const player = useVideoPlayer(n.mediaType === 'video' ? n.source : null, (p) => {
     p.loop = true;
   });
@@ -161,14 +185,15 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
           ) : (
             <View style={[styles.avatar, styles.avatarPlaceholder]} />
           )}
-          {!following && (
+          {canFollow ? (
             <TouchableOpacity
-              style={styles.followBadge}
-              onPress={() => setFollowing(true)}
+              style={[styles.followBadge, following && styles.followBadgeOn]}
+              onPress={handleFollow}
+              disabled={followBusy}
             >
-              <Ionicons name="add" size={14} color="#fff" />
+              <Ionicons name={following ? "checkmark" : "add"} size={14} color="#fff" />
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
 
         <TouchableOpacity style={styles.actionBtn} onPress={handleLike} disabled={liking}>

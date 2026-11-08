@@ -215,6 +215,53 @@ app.post('/uploads/video', (req, res) => {
   });
 });
 
+app.post('/users/follow', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+    if (!admin) return res.status(503).json({ error: 'Sunucu yapılandırması eksik (admin)' });
+
+    const { targetUid } = req.body || {};
+    if (!targetUid || typeof targetUid !== 'string') return res.status(400).json({ error: 'targetUid gerekli' });
+    if (targetUid === uidInfo.uid) return res.status(400).json({ error: 'Kendini takip edemezsin' });
+
+    const db = admin.firestore();
+    const followId = `${uidInfo.uid}_${targetUid}`;
+    const followRef = db.doc(`follows/${followId}`);
+    const meRef = db.doc(`users/${uidInfo.uid}`);
+    const targetRef = db.doc(`users/${targetUid}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const [followSnap, meSnap, targetSnap] = await Promise.all([tx.get(followRef), tx.get(meRef), tx.get(targetRef)]);
+      if (!targetSnap.exists) throw Object.assign(new Error('Kullanıcı bulunamadı'), { status: 404 });
+      const meD = meSnap.exists ? (meSnap.data() || {}) : {};
+      const tgD = targetSnap.data() || {};
+      const myFollowing = typeof meD.following === 'number' ? meD.following : 0;
+      const theirFollowers = typeof tgD.followers === 'number' ? tgD.followers : 0;
+      if (followSnap.exists) {
+        tx.delete(followRef);
+        const nf = Math.max(0, myFollowing - 1);
+        const nt = Math.max(0, theirFollowers - 1);
+        if (meSnap.exists) tx.update(meRef, { following: nf }); else tx.set(meRef, { following: nf }, { merge: true });
+        tx.update(targetRef, { followers: nt });
+        return { following: false, myFollowing: nf, theirFollowers: nt };
+      } else {
+        tx.set(followRef, { followerId: uidInfo.uid, followedId: targetUid, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+        const nf = myFollowing + 1;
+        const nt = theirFollowers + 1;
+        if (meSnap.exists) tx.update(meRef, { following: nf }); else tx.set(meRef, { following: nf }, { merge: true });
+        tx.update(targetRef, { followers: nt });
+        return { following: true, myFollowing: nf, theirFollowers: nt };
+      }
+    });
+
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e?.message || 'Takip işlemi başarısız' });
+  }
+});
+
 app.post('/videos/save', async (req, res) => {
   try {
     let uidInfo;

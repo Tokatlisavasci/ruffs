@@ -477,3 +477,34 @@ export async function fetchSavedVideos(uid) {
     return [];
   }
 }
+
+
+export async function toggleFollow(targetUid) {
+  const headers = await getSignHeaders();
+  const r = await withTimeout(
+    fetch(`${API_BASE_URL}/users/follow`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ targetUid }),
+    }),
+    15000,
+    'Takip isteği zaman aşımına uğradı.'
+  );
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data?.ok) throw new Error(data?.error || `Takip başarısız (HTTP ${r.status})`);
+  return { following: !!data.following, myFollowing: data.myFollowing, theirFollowers: data.theirFollowers };
+}
+
+export async function fetchMyFollowingIds(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return new Set();
+  try {
+    const q = query(collection(db, 'follows'), where('followerId', '==', uid));
+    const snap = await getDocs(q);
+    const ids = new Set();
+    snap.forEach((d) => { const tid = d.data()?.followedId; if (tid) ids.add(tid); });
+    return ids;
+  } catch (e) {
+    console.warn('fetchMyFollowingIds failed', e?.message || e);
+    return new Set();
+  }
+}
