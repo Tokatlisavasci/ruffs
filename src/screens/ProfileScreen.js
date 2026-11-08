@@ -81,7 +81,7 @@ function GridThumb({ uri, fallback }) {
   );
 }
 
-function VideoFeedViewer({ videos, initialIndex, onClose }) {
+function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [h, setH] = useState(height);
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
@@ -90,8 +90,16 @@ function VideoFeedViewer({ videos, initialIndex, onClose }) {
   }).current;
 
   const renderItem = useCallback(
-    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex} itemHeight={h} />,
-    [currentIndex, h]
+    ({ item, index }) => (
+      <VideoCard
+        video={item}
+        isActive={index === currentIndex}
+        itemHeight={h}
+        onDelete={onDelete ? () => onDelete(item) : undefined}
+        deleting={deletingId === item.id}
+      />
+    ),
+    [currentIndex, h, onDelete, deletingId]
   );
 
   // Sekme içi katman: alt (Liquid Glass) bar görünür kalır.
@@ -223,6 +231,8 @@ const ProfileScreen = () => {
           videos={feedVideos}
           initialIndex={viewerIndex}
           onClose={() => setViewerIndex(null)}
+          onDelete={handleDeleteVideo}
+          deletingId={deletingId}
         />
       ) : null}
 
@@ -355,14 +365,6 @@ const ProfileScreen = () => {
                   <Ionicons name="play-outline" size={14} color="#fff" />
                   <Text style={styles.thumbViews}>{formatCount(v.viewsCount || 0)}</Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.thumbDeleteBtn}
-                  onPress={() => handleDeleteVideo(v)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  disabled={deletingId === v.id}
-                >
-                  <Ionicons name={deletingId === v.id ? 'hourglass-outline' : 'trash-outline'} size={14} color="#fff" />
-                </TouchableOpacity>
               </TouchableOpacity>
             ))}
           </View>

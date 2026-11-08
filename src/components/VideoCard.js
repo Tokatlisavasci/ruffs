@@ -46,7 +46,7 @@ const normalize = (video) => {
   return { mediaType, source, thumb, user, stats, music, caption: video?.caption || '' };
 };
 
-const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width }) => {
+const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting }) => {
   const n = useMemo(() => normalize(video), [video]);
   const isFocused = useIsFocused();
   const [liked, setLiked] = useState(!!video?.isLiked);
@@ -121,6 +121,13 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width }) 
           <Ionicons name="arrow-redo" size={32} color="#fff" />
           <Text style={styles.actionText}>Paylaş</Text>
         </TouchableOpacity>
+
+        {onDelete ? (
+          <TouchableOpacity style={styles.actionBtn} onPress={onDelete} disabled={deleting}>
+            <Ionicons name={deleting ? 'hourglass-outline' : 'trash-outline'} size={28} color={deleting ? 'rgba(255,255,255,0.6)' : '#fff'} />
+            <Text style={styles.actionText}>{deleting ? 'Siliniyor' : 'Sil'}</Text>
+          </TouchableOpacity>
+        ) : null}
 
         <View style={styles.musicDisc}>
           {n.music.cover ? <Image source={{ uri: n.music.cover }} style={styles.musicCover} /> : null}
