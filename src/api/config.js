@@ -1,6 +1,7 @@
 // İmzalama API tabanı.
 // - Public/üretim (önerilen): EXPO_PUBLIC_SIGNING_API_URL=https://<PROJE>.vercel.app
 //   (Vercel için /api otomatik eklenir -> .../api/uploads/sign)
+// - Render/Express (bizim server): https://<servis>.onrender.com (kök: /uploads/*, /health)
 // - Firebase Functions örn: https://us-central1-<ID>.cloudfunctions.net/uploadsSign (tam URL de verilebilir)
 // - Yerel geliştirme: `tiktok-clone/server` (LAN IP / localhost)
 import { Platform } from 'react-native';
@@ -19,9 +20,13 @@ if (PUBLIC_URL) {
     if (/\/(uploads\/sign|uploadsSign)$/i.test(p)) {
       u.pathname = p.replace(/\/(uploads\/sign|uploadsSign)$/i, '') || '/';
       PUBLIC_URL = u.toString().replace(/\/$/, '');
-    } else if (!/\/(api)(\/|$)/i.test(p) && !/cloudfunctions\.net/i.test(u.hostname)) {
-      // Vercel/basit host: /api/uploads/sign dosya rotası için /api ekle
-      u.pathname = (p === '/' ? '' : p) + '/api';
+    } else if (/\.vercel\.app$/i.test(u.hostname)) {
+      // Vercel serverless: /api/uploads/sign dosya rotası için /api ekle
+      if (!/\/(api)(\/|$)/i.test(p)) u.pathname = (p === '/' ? '' : p) + '/api';
+      PUBLIC_URL = u.toString().replace(/\/$/, '');
+    } else if (!/cloudfunctions\.net/i.test(u.hostname)) {
+      // Render/Express (bizim server): /uploads/* ve /health kökte; yanlış eklenmiş /api'yi kaldır
+      if (/\/(api)$/i.test(p)) u.pathname = p.replace(/\/(api)$/i, '') || '/';
       PUBLIC_URL = u.toString().replace(/\/$/, '');
     }
   } catch {}

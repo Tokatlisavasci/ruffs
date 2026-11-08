@@ -89,18 +89,27 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
 }
 
-function uploadMultipartXHR(url, form, { timeoutMs = 10 * 60 * 1000 } = {}) {
+function uploadMultipartXHR(url, form, { timeoutMs = 10 * 60 * 1000, headers } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', url);
     xhr.timeout = timeoutMs;
+    if (headers && typeof headers === 'object') {
+      Object.entries(headers).forEach(([k, v]) => {
+        if (v != null && String(k).toLowerCase() !== 'content-type') xhr.setRequestHeader(k, String(v));
+      });
+    }
     xhr.onload = () => {
       let data = {};
       try {
         data = JSON.parse(xhr.responseText || '{}');
       } catch {}
       if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-      else reject(Object.assign(new Error(data?.error?.message || 'Yükleme başarısız'), { data, status: xhr.status }));
+      else {
+        const msg = (typeof data?.error === 'string' ? data.error : data?.error?.message) || data?.detail?.error
+          || (xhr.responseText && !xhr.responseText.trim().startsWith('{') ? `Yükleme başarısız (HTTP ${xhr.status})` : `Yükleme başarısız (HTTP ${xhr.status})`);
+        reject(Object.assign(new Error(msg), { data, status: xhr.status }));
+      }
     };
     xhr.onerror = () => reject(new Error('Ağ hatası (yükleme). Bağlantınızı kontrol edin.'));
     xhr.ontimeout = () => reject(new Error('Yükleme zaman aşımına uğradı. Dosya büyük olabilir veya bağlantı yavaş; tekrar deneyin.'));
@@ -150,15 +159,11 @@ async function uploadVideoToLoopsServer({ uri, caption, mediaType, mimeType }) {
     name: guessName(uri, mediaType) || 'upload.mp4',
     type: mimeType || 'video/mp4',
   });
-  const headers = await getSignHeaders();
-  delete headers['Content-Type']; // fetch/FormData sınırı kendi belirler
-  const r = await withTimeout(
-    fetch(`${API_BASE_URL}/uploads/video`, { method: 'POST', headers, body: form }),
-    180000,
-    'Video yüklemesi zaman aşımına uğradı. İnternetini kontrol edip tekrar dene.'
-  );
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data?.error || data?.detail?.error || 'Video yüklenemedi');
+  const headers = await getSignHeaders(); // Authorization: Bearer <idToken>
+  const data = await uploadMultipartXHR(`${API_BASE_URL}/uploads/video`, form, {
+    timeoutMs: 180000,
+    headers,
+  });
   if (!data?.mediaUrl && !data?.playbackUrl) throw new Error('Loops yanıtından video URL’si alınamadı.');
   return data;
 }

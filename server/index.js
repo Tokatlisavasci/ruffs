@@ -38,6 +38,52 @@ function loopsConfig() {
   return { base, token };
 }
 
+
+
+async function loopsGet(path, token, base) {
+  const r = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(data?.error?.message || data?.error || `Loops API hatası (${r.status})`), { status: r.status, data });
+  return data;
+}
+
+function pickVideoIdFromPost(p) {
+  if (!p || typeof p !== 'object') return null;
+  return p.id || p.video_id || p.videoId || p?.video?.id || null;
+}
+
+async function findUploadedLoopsVideo({ base, token, description, attempts = 12, delayMs = 5000 }) {
+  const want = String(description || '').trim();
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await loopsGet('/api/v1/studio/posts', token, base);
+      const list = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+      let hit = null;
+      if (want) {
+        hit = list.find(p => {
+          const cap = String(p?.caption || p?.description || p?.meta?.caption || '').trim();
+          return cap && cap === want;
+        });
+      }
+      if (!hit && list.length) hit = list[0]; // en yeni/genel fallback (studio sıralaması genelde yeniden eskiye)
+      const id = pickVideoIdFromPost(hit);
+      if (id) {
+        const full = await loopsGet(`/api/v1/video/${encodeURIComponent(id)}`, token, base);
+        const media = pickLoopsMedia(full?.data ? full : { data: full });
+        if (media.mediaUrl) return media;
+        // studio post içinde medya olabilir
+        const media2 = pickLoopsMedia(hit);
+        if (media2.mediaUrl) return { ...media2, loopsId: media2.loopsId || id };
+      }
+    } catch (e) {
+      // işleme devam ediyor olabilir; son denemede yüzdür
+      if (i === attempts - 1) throw e;
+    }
+    if (i < attempts - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
 async function uploadToLoops({ filePath, filename, mimeType, description }) {
   const cfg = loopsConfig();
   if (!cfg) throw Object.assign(new Error('Loops yapılandırılmadı (LOOPS_ACCESS_TOKEN).'), { status: 503 });
@@ -138,10 +184,22 @@ app.post('/uploads/video', (req, res) => {
         mimeType: req.file.mimetype || 'video/mp4',
         description: caption,
       });
-      const picked = pickLoopsMedia(data);
+      let picked = pickLoopsMedia(data);
+      if (!picked.mediaUrl) {
+        const codeOk = data?.error?.code === 'ok' || data?.status === 'ok';
+        const cfg = loopsConfig();
+        if (codeOk && cfg) {
+          try {
+            const polled = await findUploadedLoopsVideo({ base: cfg.base, token: cfg.token, description: caption, attempts: 10, delayMs: 5000 });
+            if (polled?.mediaUrl) picked = polled;
+          } catch (e) {
+            try { console.error('loops upload: poll failed', e?.message || e); } catch {}
+          }
+        }
+      }
       if (!picked.mediaUrl) {
         try { console.error('loops upload: media url missing', JSON.stringify({ keys: Object.keys(data||{}), data }).slice(0, 6000)); } catch {}
-        return res.status(502).json({ error: picked.processing ? 'Video Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : 'Loops yanıtından video URL’si alınamadı', raw: data });
+        return res.status(502).json({ error: picked.processing ? 'Video Loops tarafında işleniyor; URL henüz hazır değil. Biraz sonra tekrar dene.' : 'Loops videoyu aldı ancak işlenmesi/URL oluşması zaman alıyor olabilir. 1-2 dakika sonra profilden kontrol et veya tekrar dene.', raw: data });
       }
       return res.json({
         provider: 'loops',
