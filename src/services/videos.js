@@ -205,6 +205,7 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
       likesCount: 0,
       commentsCount: 0,
       sharesCount: 0,
+      savesCount: 0,
       viewsCount: 0,
       createdAt: serverTimestamp(),
     };
@@ -250,6 +251,7 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
     likesCount: 0,
     commentsCount: 0,
     sharesCount: 0,
+    savesCount: 0,
     viewsCount: 0,
     createdAt: serverTimestamp(),
   };
@@ -436,7 +438,7 @@ export async function toggleVideoSave(videoId) {
   );
   const data = await r.json().catch(() => ({}));
   if (!r.ok || !data?.ok) throw new Error(data?.error || `Kaydetme başarısız (HTTP ${r.status})`);
-  return { saved: !!data.saved };
+  return { saved: !!data.saved, savesCount: typeof data.savesCount === 'number' ? data.savesCount : undefined };
 }
 
 export async function fetchMySavedIds(uid) {

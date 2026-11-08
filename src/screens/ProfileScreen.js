@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserVideos, fetchLikedVideos, fetchSavedVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
+import { fetchUserVideos, fetchLikedVideos, fetchSavedVideos, fetchMyLikedIds, fetchMySavedIds, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
 import VideoCard from '../components/VideoCard';
 
 const { height } = Dimensions.get('window');
@@ -193,8 +193,12 @@ const ProfileScreen = () => {
     }
     setLoadError(null);
     try {
-      const items = await fetchUserVideos(user.id);
-      setMyVideos(items);
+      const [items, lIds, sIds] = await Promise.all([
+        fetchUserVideos(user.id),
+        fetchMyLikedIds(user.id),
+        fetchMySavedIds(user.id),
+      ]);
+      setMyVideos((items || []).map((v) => ({ ...v, isLiked: lIds?.has?.(v.id), isBookmarked: sIds?.has?.(v.id) })));
     } catch (e) {
       const code = String(e?.code || '');
       if (code.includes('permission-denied')) {
@@ -236,12 +240,13 @@ const ProfileScreen = () => {
     setSavedVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isLiked: liked, likesCount } : x)));
   };
 
-  const handleSaveChanged = ({ videoId, saved }) => {
-    setMyVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x)));
-    setLikedVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x)));
+  const handleSaveChanged = ({ videoId, saved, savesCount }) => {
+    const sc = typeof savesCount === 'number' ? { savesCount } : {};
+    setMyVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved, ...sc } : x)));
+    setLikedVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved, ...sc } : x)));
     setSavedVideos((prev) => {
       if (!saved) return prev.filter((x) => x.id !== videoId);
-      return prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved } : x));
+      return prev.map((x) => (x.id === videoId ? { ...x, isBookmarked: saved, ...sc } : x));
     });
   };
 

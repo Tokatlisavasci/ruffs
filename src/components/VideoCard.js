@@ -38,6 +38,7 @@ const normalize = (video) => {
     likes: video?.likesCount ?? 0,
     comments: video?.commentsCount ?? 0,
     shares: video?.sharesCount ?? 0,
+    saves: video?.savesCount ?? 0,
   };
   const music = video?.music || {
     title: `Orijinal ses - ${String(user.username || '').replace(/^@/, '') || 'ruffs'}`,
@@ -56,10 +57,15 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   const viewedRef = useRef(false);
   const [saved, setSaved] = useState(!!video?.isBookmarked);
   const [saving, setSaving] = useState(false);
+  const [savesCount, setSavesCount] = useState(typeof (video?.savesCount ?? video?.stats?.saves) === 'number' ? (video?.savesCount ?? video?.stats?.saves) : 0);
   const [following, setFollowing] = useState(!!n.user?.isFollowing);
 
   useEffect(() => { setLiked(!!video?.isLiked); }, [video?.id, video?.isLiked]);
   useEffect(() => { setSaved(!!video?.isBookmarked); }, [video?.id, video?.isBookmarked]);
+  useEffect(() => {
+    const sc = video?.savesCount ?? video?.stats?.saves;
+    if (typeof sc === 'number') setSavesCount(sc);
+  }, [video?.id, video?.savesCount, video?.stats?.saves]);
   useEffect(() => {
     const lc = video?.likesCount ?? video?.stats?.likes;
     if (typeof lc === 'number') setLikesCount(lc);
@@ -102,15 +108,19 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   const handleSave = async () => {
     if (saving || !video?.id) return;
     const prev = saved;
+    const prevCount = savesCount;
     const next = !prev;
     setSaved(next);
+    setSavesCount(Math.max(0, prevCount + (next ? 1 : -1)));
     setSaving(true);
     try {
       const res = await toggleVideoSave(video.id);
       setSaved(res.saved);
-      onSaveChanged?.({ videoId: video.id, saved: res.saved });
+      if (typeof res.savesCount === 'number') setSavesCount(res.savesCount);
+      onSaveChanged?.({ videoId: video.id, saved: res.saved, savesCount: typeof res.savesCount === 'number' ? res.savesCount : undefined });
     } catch (e) {
       setSaved(prev);
+      setSavesCount(prevCount);
     } finally {
       setSaving(false);
     }
@@ -181,7 +191,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
             size={32}
             color={saved ? '#face15' : '#fff'}
           />
-          <Text style={styles.actionText}>{formatCount(n.stats.shares)}</Text>
+          <Text style={styles.actionText}>{formatCount(savesCount)}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionBtn}>

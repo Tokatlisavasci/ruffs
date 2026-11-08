@@ -65,9 +65,9 @@ const HomeScreen = () => {
     setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isLiked: liked, likesCount, stats: { ...(v.stats||{}), likes: likesCount } } : v)));
   };
 
-  const handleSaveChanged = ({ videoId, saved }) => {
+  const handleSaveChanged = ({ videoId, saved, savesCount }) => {
     setSavedIds((prev) => { const n = new Set(prev); saved ? n.add(videoId) : n.delete(videoId); return n; });
-    setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isBookmarked: saved } : v)));
+    setFeed((prev) => prev.map((v) => (v.id === videoId ? { ...v, isBookmarked: saved, ...(typeof savesCount === 'number' ? { savesCount, stats: { ...(v.stats||{}), saves: savesCount } } : {}) } : v)));
   };
 
   const onViewableItemsChanged = useRef(({ viewableItems }) => {

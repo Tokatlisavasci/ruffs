@@ -233,12 +233,18 @@ app.post('/videos/save', async (req, res) => {
     const result = await db.runTransaction(async (tx) => {
       const [saveSnap, videoSnap] = await Promise.all([tx.get(saveRef), tx.get(videoRef)]);
       if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
+      const vd = videoSnap.data() || {};
+      const cur = typeof vd.savesCount === 'number' ? vd.savesCount : 0;
       if (saveSnap.exists) {
         tx.delete(saveRef);
-        return { saved: false };
+        const next = Math.max(0, cur - 1);
+        tx.update(videoRef, { savesCount: next });
+        return { saved: false, savesCount: next };
       } else {
         tx.set(saveRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
-        return { saved: true };
+        const next = cur + 1;
+        tx.update(videoRef, { savesCount: next });
+        return { saved: true, savesCount: next };
       }
     });
 
