@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType } from '../services/videos';
+import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike } from '../services/videos';
 
 const { width, height } = Dimensions.get('window');
 
@@ -46,12 +46,41 @@ const normalize = (video) => {
   return { mediaType, source, thumb, user, stats, music, caption: video?.caption || '' };
 };
 
-const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting }) => {
+const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, onDelete, deleting, onLikeChanged }) => {
   const n = useMemo(() => normalize(video), [video]);
   const isFocused = useIsFocused();
   const [liked, setLiked] = useState(!!video?.isLiked);
+  const [likesCount, setLikesCount] = useState(typeof (video?.likesCount ?? video?.stats?.likes) === 'number' ? (video?.likesCount ?? video?.stats?.likes) : 0);
+  const [liking, setLiking] = useState(false);
   const [saved, setSaved] = useState(!!video?.isBookmarked);
   const [following, setFollowing] = useState(!!n.user?.isFollowing);
+
+  useEffect(() => { setLiked(!!video?.isLiked); }, [video?.id, video?.isLiked]);
+  useEffect(() => {
+    const lc = video?.likesCount ?? video?.stats?.likes;
+    if (typeof lc === 'number') setLikesCount(lc);
+  }, [video?.id, video?.likesCount, video?.stats?.likes]);
+
+  const handleLike = async () => {
+    if (liking || !video?.id) return;
+    const prevLiked = liked;
+    const prevCount = likesCount;
+    const nextLiked = !prevLiked;
+    setLiked(nextLiked);
+    setLikesCount(Math.max(0, prevCount + (nextLiked ? 1 : -1)));
+    setLiking(true);
+    try {
+      const res = await toggleVideoLike(video.id);
+      setLiked(res.liked);
+      setLikesCount(res.likesCount);
+      onLikeChanged?.({ videoId: video.id, liked: res.liked, likesCount: res.likesCount });
+    } catch (e) {
+      setLiked(prevLiked);
+      setLikesCount(prevCount);
+    } finally {
+      setLiking(false);
+    }
+  };
 
   const player = useVideoPlayer(n.mediaType === 'video' ? n.source : null, (p) => {
     p.loop = true;
@@ -94,13 +123,13 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
           )}
         </View>
 
-        <TouchableOpacity style={styles.actionBtn} onPress={() => setLiked(!liked)}>
+        <TouchableOpacity style={styles.actionBtn} onPress={handleLike} disabled={liking}>
           <Ionicons
             name={liked ? 'heart' : 'heart-outline'}
             size={34}
             color={liked ? '#FE2C55' : '#fff'}
           />
-          <Text style={styles.actionText}>{formatCount(n.stats.likes)}</Text>
+          <Text style={styles.actionText}>{formatCount(likesCount)}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.actionBtn}>

@@ -1,5 +1,6 @@
 import {
   collection,
+  getDoc,
   addDoc,
   query,
   where,
@@ -347,4 +348,58 @@ export async function deleteUserVideo({ videoId, loopsId, user }) {
 
   await deleteDoc(doc(db, 'videos', videoId));
   return true;
+}
+
+
+export async function toggleVideoLike(videoId) {
+  const headers = await getSignHeaders();
+  const r = await withTimeout(
+    fetch(`${API_BASE_URL}/videos/like`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ videoId }),
+    }),
+    15000,
+    'Beğeni isteği zaman aşımına uğradı.'
+  );
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data?.ok) throw new Error(data?.error || `Beğeni başarısız (HTTP ${r.status})`);
+  return { liked: !!data.liked, likesCount: typeof data.likesCount === 'number' ? data.likesCount : 0 };
+}
+
+export async function fetchMyLikedIds(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return new Set();
+  try {
+    const q = query(collection(db, 'likes'), where('uid', '==', uid));
+    const snap = await getDocs(q);
+    const ids = new Set();
+    snap.forEach((d) => { const vid = d.data()?.videoId; if (vid) ids.add(vid); });
+    return ids;
+  } catch (e) {
+    console.warn('fetchMyLikedIds failed', e?.message || e);
+    return new Set();
+  }
+}
+
+export async function fetchLikedVideos(uid) {
+  if (!isFirebaseConfigured || !db || !uid) return [];
+  try {
+    const q = query(collection(db, 'likes'), where('uid', '==', uid));
+    const snap = await getDocs(q);
+    const likes = [];
+    snap.forEach((d) => likes.push({ id: d.id, ...d.data() }));
+    likes.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+    const out = [];
+    for (const lk of likes) {
+      if (!lk.videoId) continue;
+      try {
+        const vs = await getDoc(doc(db, 'videos', lk.videoId));
+        if (vs.exists()) out.push({ id: vs.id, ...vs.data(), isLiked: true });
+      } catch {}
+    }
+    return out;
+  } catch (e) {
+    console.warn('fetchLikedVideos failed', e?.message || e);
+    return [];
+  }
 }

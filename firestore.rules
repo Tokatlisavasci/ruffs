@@ -25,6 +25,12 @@ service cloud.firestore {
       allow update, delete: if signedIn() && resource.data.uid == request.auth.uid;
     }
 
+    // Beğeniler: okuma sadece sahibi (beğendiklerim listesi), yazma sunucu (admin) üzerinden.
+    match /likes/{likeId} {
+      allow read: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
     // Varsayılan: kapalı
     match /{document=**} {
       allow read, write: if false;

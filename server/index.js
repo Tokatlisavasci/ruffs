@@ -215,6 +215,45 @@ app.post('/uploads/video', (req, res) => {
   });
 });
 
+app.post('/videos/like', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+    if (!admin) return res.status(503).json({ error: 'Sunucu yapılandırması eksik (admin)' });
+
+    const { videoId } = req.body || {};
+    if (!videoId || typeof videoId !== 'string') return res.status(400).json({ error: 'videoId gerekli' });
+
+    const db = admin.firestore();
+    const likeId = `${videoId}_${uidInfo.uid}`;
+    const likeRef = db.doc(`likes/${likeId}`);
+    const videoRef = db.doc(`videos/${videoId}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const [likeSnap, videoSnap] = await Promise.all([tx.get(likeRef), tx.get(videoRef)]);
+      if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
+      const vd = videoSnap.data() || {};
+      const cur = typeof vd.likesCount === 'number' ? vd.likesCount : 0;
+      if (likeSnap.exists) {
+        tx.delete(likeRef);
+        const next = Math.max(0, cur - 1);
+        tx.update(videoRef, { likesCount: next });
+        return { liked: false, likesCount: next };
+      } else {
+        tx.set(likeRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+        const next = cur + 1;
+        tx.update(videoRef, { likesCount: next });
+        return { liked: true, likesCount: next };
+      }
+    });
+
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e?.message || 'Beğeni işlemi başarısız' });
+  }
+});
+
 app.post('/uploads/video/delete', async (req, res) => {
   try {
     let uidInfo;

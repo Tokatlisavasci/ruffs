@@ -13,10 +13,11 @@ import {
   FlatList,
   Dimensions,
   StatusBar,
+  PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
-import { fetchUserVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
+import { fetchUserVideos, fetchLikedVideos, deriveVideoThumbnail, deleteUserVideo } from '../services/videos';
 import VideoCard from '../components/VideoCard';
 
 const { height } = Dimensions.get('window');
@@ -81,13 +82,26 @@ function GridThumb({ uri, fallback }) {
   );
 }
 
-function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId }) {
+function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId, onLikeChanged }) {
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [h, setH] = useState(height);
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
     if (viewableItems.length > 0) setCurrentIndex(viewableItems[0].index ?? 0);
   }).current;
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const dismissSwipe = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 10 && Math.abs(g.dy) > Math.abs(g.dx) * 1.15,
+      onMoveShouldSetPanResponderCapture: (_, g) => g.dy > 16 && Math.abs(g.dy) > Math.abs(g.dx) * 1.25,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 70 && Math.abs(g.dx) < 120) closeRef.current?.();
+      },
+    })
+  ).current;
 
   const renderItem = useCallback(
     ({ item, index }) => (
@@ -97,15 +111,17 @@ function VideoFeedViewer({ videos, initialIndex, onClose, onDelete, deletingId }
         itemHeight={h}
         onDelete={onDelete ? () => onDelete(item) : undefined}
         deleting={deletingId === item.id}
+        onLikeChanged={onLikeChanged}
       />
     ),
-    [currentIndex, h, onDelete, deletingId]
+    [currentIndex, h, onDelete, deletingId, onLikeChanged]
   );
 
   // Sekme içi katman: alt (Liquid Glass) bar görünür kalır.
   return (
     <View style={styles.viewerOverlay} onLayout={(e) => { const nh = e.nativeEvent.layout.height; if (nh > 0) setH(nh); }}>
       <StatusBar barStyle="light-content" />
+      <View style={styles.viewerDismissZone} {...dismissSwipe.panHandlers} />
       <TouchableOpacity style={styles.viewerClose} onPress={onClose}>
         <Ionicons name="chevron-back" size={28} color="#fff" />
       </TouchableOpacity>
@@ -139,8 +155,21 @@ const ProfileScreen = () => {
   const [loadError, setLoadError] = useState(null);
   const [viewerIndex, setViewerIndex] = useState(null);
   const [deletingId, setDeletingId] = useState(null);
+  const [likedVideos, setLikedVideos] = useState([]);
+  const [likedLoading, setLikedLoading] = useState(false);
+  const [likedViewerIndex, setLikedViewerIndex] = useState(null);
   const isFocused = useIsFocused();
-  useEffect(() => { if (!isFocused) setViewerIndex(null); }, [isFocused]);
+  const loadLiked = useCallback(async () => {
+    if (!user?.id) return;
+    setLikedLoading(true);
+    try {
+      const items = await fetchLikedVideos(user.id);
+      setLikedVideos(items);
+    } catch {}
+    finally { setLikedLoading(false); }
+  }, [user?.id]);
+
+  useEffect(() => { if (!isFocused) { setViewerIndex(null); setLikedViewerIndex(null); } }, [isFocused]);
 
   const load = async () => {
     if (!user?.id) {
@@ -184,6 +213,14 @@ const ProfileScreen = () => {
     ]);
   };
 
+  const handleLikeChanged = ({ videoId, liked, likesCount }) => {
+    setMyVideos((prev) => prev.map((x) => (x.id === videoId ? { ...x, isLiked: liked, likesCount } : x)));
+    setLikedVideos((prev) => {
+      if (!liked) return prev.filter((x) => x.id !== videoId);
+      return prev.map((x) => (x.id === videoId ? { ...x, isLiked: liked, likesCount } : x));
+    });
+  };
+
   const handleDeleteVideo = (v) => {
     if (!v?.id || deletingId) return;
     Alert.alert('Videoyu sil', 'Bu videoyu silmek istiyor musun? Bu işlem geri alınamaz.', [
@@ -223,6 +260,7 @@ const ProfileScreen = () => {
   if (!user) return null;
 
   const feedVideos = myVideos.map((v) => mapToFeedVideo(v, user));
+  const likedFeedVideos = likedVideos.map((v) => ({ ...mapToFeedVideo(v, { username: v.username, displayName: v.displayName, avatar: v.avatar }), isLiked: true }));
 
   return (
     <View style={styles.container}>
@@ -233,6 +271,14 @@ const ProfileScreen = () => {
           onClose={() => setViewerIndex(null)}
           onDelete={handleDeleteVideo}
           deletingId={deletingId}
+          onLikeChanged={handleLikeChanged}
+        />
+      ) : likedViewerIndex != null ? (
+        <VideoFeedViewer
+          videos={likedFeedVideos}
+          initialIndex={likedViewerIndex}
+          onClose={() => setLikedViewerIndex(null)}
+          onLikeChanged={handleLikeChanged}
         />
       ) : null}
 
@@ -311,7 +357,7 @@ const ProfileScreen = () => {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.tab, activeTab === 'liked' && styles.tabActive]}
-            onPress={() => setActiveTab('liked')}
+            onPress={() => { setActiveTab('liked'); loadLiked(); }}
           >
             <Ionicons
               name="heart-outline"
@@ -329,11 +375,31 @@ const ProfileScreen = () => {
             <Text style={styles.emptyDesc}>Buradaki videoları yalnızca sen görebilirsin.</Text>
           </View>
         ) : activeTab === 'liked' ? (
-          <View style={styles.emptyState}>
-            <Ionicons name="heart-outline" size={40} color="rgba(255,255,255,0.35)" />
-            <Text style={styles.emptyTitle}>Beğenilen videolar</Text>
-            <Text style={styles.emptyDesc}>Beğendiğin videolar burada görünecek.</Text>
-          </View>
+          likedLoading ? (
+            <View style={styles.loadingWrap}><ActivityIndicator color="#fff" /></View>
+          ) : likedVideos.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="heart-outline" size={40} color="rgba(255,255,255,0.35)" />
+              <Text style={styles.emptyTitle}>Beğenilen videolar</Text>
+              <Text style={styles.emptyDesc}>Beğendiğin videolar burada görünecek.</Text>
+            </View>
+          ) : (
+            <View style={styles.grid}>
+              {likedVideos.map((v, i) => (
+                <TouchableOpacity
+                  key={v.id}
+                  style={[styles.gridItem, (i % 3 === 2) && { marginRight: 0 }]}
+                  onPress={() => (v.mediaUrl || v.videoUrl) ? setLikedViewerIndex(i) : null}
+                >
+                  <GridThumb uri={thumbUri(v)} fallback={deriveVideoThumbnail(v.mediaUrl || v.videoUrl)} />
+                  <View style={styles.thumbOverlay}>
+                    <Ionicons name="play-outline" size={14} color="#fff" />
+                    <Text style={styles.thumbViews}>{formatCount(v.likesCount || 0)}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )
         ) : loading ? (
           <View style={styles.loadingWrap}>
             <ActivityIndicator color="#fff" />
