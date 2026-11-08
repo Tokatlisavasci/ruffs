@@ -241,6 +241,16 @@ app.post('/users/follow', async (req, res) => {
         const nt = theirFollowers + 1;
         if (meSnap.exists) tx.update(meRef, { following: nf }); else tx.set(meRef, { following: nf }, { merge: true });
         tx.update(targetRef, { followers: nt });
+        const notifRef = db.collection('users').doc(targetUid).collection('notifications').doc();
+        tx.set(notifRef, {
+          type: 'new_follower',
+          fromUid: uidInfo.uid,
+          fromUsername: meD.username || null,
+          fromDisplayName: meD.displayName || null,
+          fromAvatar: meD.avatar || meD.photoURL || null,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
         return { following: true, myFollowing: nf, theirFollowers: nt };
       }
     });

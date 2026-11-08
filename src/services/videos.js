@@ -6,9 +6,11 @@ import {
   where,
   getDocs,
   orderBy,
+  limit,
   serverTimestamp,
   deleteDoc,
   doc,
+  updateDoc,
 } from 'firebase/firestore';
 import { Platform } from 'react-native';
 import { db, isFirebaseConfigured, auth } from '../config/firebase';
@@ -420,4 +422,39 @@ export async function fetchUserProfile(uid) {
     console.warn('fetchUserProfile failed', e?.message || e);
     return null;
   }
+}
+
+
+export async function fetchNotifications(uid, limitN = 50) {
+  if (!isFirebaseConfigured || !db) return [];
+  if (!uid) return [];
+  try {
+    const q = query(
+      collection(db, 'users', uid, 'notifications'),
+      orderBy('createdAt', 'desc'),
+      limit(limitN)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch (e) {
+    // index/alan sorunu olursa sırasız çekip sırala
+    try {
+      const snap = await getDocs(collection(db, 'users', uid, 'notifications'));
+      const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      items.sort((a, b) => {
+        const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+        const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+        return tb - ta;
+      });
+      return items.slice(0, limitN);
+    } catch { return []; }
+  }
+}
+
+export async function markNotificationRead(uid, notifId) {
+  if (!isFirebaseConfigured || !db) return;
+  if (!uid || !notifId) return;
+  try {
+    await updateDoc(doc(db, 'users', uid, 'notifications', notifId), { read: true });
+  } catch {}
 }

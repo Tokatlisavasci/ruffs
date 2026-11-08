@@ -16,6 +16,14 @@ service cloud.firestore {
           ['username','displayName','bio','avatar','email','followers','following','likes','createdAt','photoURL']
         );
       allow delete: if false;
+
+      // Bildirimler: sadece sahibi okuyabilir; okundu işaretini güncelleyebilir; oluşturma/silme sunucu.
+      match /notifications/{notifId} {
+        allow read: if isOwner(userId);
+        allow update: if isOwner(userId)
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(['read']);
+        allow create, delete: if false;
+      }
     }
 
     // Gönderiler: herkes okuyabilir (ana sayfa), sadece sahibi yazar/siler.
