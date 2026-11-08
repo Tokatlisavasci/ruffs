@@ -11,6 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useNotifications } from '../context/NotificationsContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const BAR_MARGIN = 18;
@@ -28,6 +29,7 @@ const TAB_ICONS = {
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 const LiquidGlassTabBar = ({ state, navigation }) => {
+  const { unreadCount } = useNotifications() || {};
   const visible = state.routes
     .map((route, routeIndex) => ({ route, routeIndex }))
     .filter(({ route }) => !HIDDEN_ROUTES.has(route.name));
@@ -217,7 +219,7 @@ const LiquidGlassTabBar = ({ state, navigation }) => {
                     size={24}
                     color={isFocused ? '#FFFFFF' : 'rgba(255,255,255,0.62)'}
                   />
-                  {route.name === 'Mesajlar' ? (
+                  {route.name === 'Mesajlar' && unreadCount > 0 ? (
                     <View style={styles.badge}>
                       <View style={styles.badgeDot} />
                     </View>

@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import { useAuth } from '../context/AuthContext';
+import { NotificationsProvider } from '../context/NotificationsContext';
 import LiquidGlassTabBar from '../components/LiquidGlassTabBar';
 import HomeScreen from '../screens/HomeScreen';
 import DiscoverScreen from '../screens/DiscoverScreen';
@@ -69,9 +70,11 @@ const RootNavigator = () => {
 
 const TikTokCloneApp = () => {
   return (
-    <NavigationContainer>
-      <RootNavigator />
-    </NavigationContainer>
+    <NotificationsProvider>
+      <NavigationContainer>
+        <RootNavigator />
+      </NavigationContainer>
+    </NotificationsProvider>
   );
 };
 

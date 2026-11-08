@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { fetchNotifications, markNotificationRead } from '../services/videos';
 
 function timeAgo(ts) {
@@ -40,23 +41,26 @@ function notifText(n) {
 const InboxScreen = () => {
   const navigation = useNavigation();
   const { user } = useAuth();
+  const { setUnreadCount } = useNotifications() || {};
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [view, setView] = useState('main'); // main | followers | interactions
 
   const load = useCallback(async (silent = false) => {
-    if (!user?.id) { setItems([]); return; }
+    if (!user?.id) { setItems([]); setUnreadCount?.(0); return; }
     if (!silent) setLoading(true);
     try {
       const list = await fetchNotifications(user.id, 80);
-      setItems(Array.isArray(list) ? list : []);
+      const arr = Array.isArray(list) ? list : [];
+      setItems(arr);
+      setUnreadCount?.(arr.filter((x) => !x.read).length);
     } catch {
       setItems([]);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [user?.id]);
+  }, [user?.id, setUnreadCount]);
 
   useFocusEffect(
     useCallback(() => {
@@ -83,7 +87,11 @@ const InboxScreen = () => {
 
   const onPressNotif = async (n) => {
     if (!n?.read && user?.id && n?.id) {
-      setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
+      setItems((prev) => {
+        const next = prev.map((x) => (x.id === n.id ? { ...x, read: true } : x));
+        setUnreadCount?.(next.filter((x) => !x.read).length);
+        return next;
+      });
       markNotificationRead(user.id, n.id);
     }
     openProfile(n?.fromUid);
