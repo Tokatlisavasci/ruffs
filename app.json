@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "Ruffs",
+    "slug": "ruffs",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "ruffs",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#000000"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.ruffs.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Ruffs video kaydetmek için kameraya erişim ister.",
+        "NSMicrophoneUsageDescription": "Ruffs videoya ses eklemek için mikrofona erişim ister."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "package": "com.ruffs.app",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-video"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2509bbd2-af45-4df3-8fc9-4fca3869fa02"
+      }
+    },
+    "owner": "muzaffer60"
+  }
+}

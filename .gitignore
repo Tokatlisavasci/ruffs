@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets (ASLA commit etme)
+.env
+.env.*
+!.env.example
+server/.env
+functions/.env
+
+# Firebase / Google service account keys (ASLA commit etme)
+*-firebase-adminsdk-*.json
+*service-account*.json
+*serviceAccount*.json
+google-services.json
+GoogleService-Info.plist
+
+# Expo / build
+.expo/
+.expo-shared/
+dist/
+build/
+web-build/
+
+# Logs / OS
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

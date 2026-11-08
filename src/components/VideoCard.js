@@ -1,0 +1,241 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { useIsFocused } from '@react-navigation/native';
+import {
+  View,
+  Text,
+  Image,
+  StyleSheet,
+  TouchableOpacity,
+  Dimensions,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { useVideoPlayer, VideoView } from 'expo-video';
+import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType } from '../services/videos';
+
+const { width, height } = Dimensions.get('window');
+
+const formatCount = (value) => {
+  if (value == null || value === '') return '0';
+  if (typeof value === 'string') return value;
+  if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
+  if (value >= 1000) return (value / 1000).toFixed(1) + 'K';
+  return String(value);
+};
+
+const normalize = (video) => {
+  const mediaType = video?.mediaType || inferMediaType({ uri: video?.mediaUrl || video?.videoUri || video?.videoUrl });
+  const rawSource = video?.videoUri || video?.mediaUrl || video?.videoUrl || null;
+  const source = mediaType === 'video' ? (deriveVideoPlaybackUrl(rawSource) || rawSource) : rawSource;
+  const thumb = video?.thumbnail || video?.thumbnailUrl || (mediaType === 'video' && rawSource ? deriveVideoThumbnail(rawSource) : rawSource);
+  const user = video?.user || {
+    username: video?.username ? `@${String(video.username).replace(/^@/, '')}` : '@kullanici',
+    displayName: video?.displayName || '',
+    avatar: video?.avatar || 'https://i.pravatar.cc/150?img=12',
+    isVerified: false,
+    isFollowing: false,
+  };
+  const stats = video?.stats || {
+    likes: video?.likesCount ?? 0,
+    comments: video?.commentsCount ?? 0,
+    shares: video?.sharesCount ?? 0,
+  };
+  const music = video?.music || {
+    title: `Orijinal ses - ${String(user.username || '').replace(/^@/, '') || 'ruffs'}`,
+    cover: user.avatar,
+  };
+  return { mediaType, source, thumb, user, stats, music, caption: video?.caption || '' };
+};
+
+const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width }) => {
+  const n = useMemo(() => normalize(video), [video]);
+  const isFocused = useIsFocused();
+  const [liked, setLiked] = useState(!!video?.isLiked);
+  const [saved, setSaved] = useState(!!video?.isBookmarked);
+  const [following, setFollowing] = useState(!!n.user?.isFollowing);
+
+  const player = useVideoPlayer(n.mediaType === 'video' ? n.source : null, (p) => {
+    p.loop = true;
+  });
+
+  useEffect(() => {
+    if (n.mediaType !== 'video' || !n.source) return;
+    try {
+      if (isActive && isFocused) player.play();
+      else player.pause();
+    } catch {}
+  }, [isActive, isFocused, n.source, n.mediaType, player]);
+
+  return (
+    <View style={[styles.container, { width: itemWidth, height: itemHeight }]}>
+      {n.mediaType === 'video' && n.source ? (
+        <VideoView
+          player={player}
+          style={styles.background}
+          contentFit="cover"
+          nativeControls={false}
+        />
+      ) : n.source || n.thumb ? (
+        <Image source={{ uri: n.thumb || n.source }} style={styles.background} resizeMode="cover" />
+      ) : (
+        <View style={[styles.background, { backgroundColor: '#111' }]} />
+      )}
+
+      {/* Sağ aksiyon sütunu */}
+      <View style={styles.actions}>
+        <View style={styles.avatarWrap}>
+          <Image source={{ uri: n.user.avatar }} style={styles.avatar} />
+          {!following && (
+            <TouchableOpacity
+              style={styles.followBadge}
+              onPress={() => setFollowing(true)}
+            >
+              <Ionicons name="add" size={14} color="#fff" />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <TouchableOpacity style={styles.actionBtn} onPress={() => setLiked(!liked)}>
+          <Ionicons
+            name={liked ? 'heart' : 'heart-outline'}
+            size={34}
+            color={liked ? '#FE2C55' : '#fff'}
+          />
+          <Text style={styles.actionText}>{formatCount(n.stats.likes)}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.actionBtn}>
+          <Ionicons name="chatbubble-ellipses" size={32} color="#fff" />
+          <Text style={styles.actionText}>{formatCount(n.stats.comments)}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.actionBtn} onPress={() => setSaved(!saved)}>
+          <Ionicons
+            name={saved ? 'bookmark' : 'bookmark-outline'}
+            size={32}
+            color={saved ? '#face15' : '#fff'}
+          />
+          <Text style={styles.actionText}>{formatCount(n.stats.shares)}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.actionBtn}>
+          <Ionicons name="arrow-redo" size={32} color="#fff" />
+          <Text style={styles.actionText}>Paylaş</Text>
+        </TouchableOpacity>
+
+        <View style={styles.musicDisc}>
+          {n.music.cover ? <Image source={{ uri: n.music.cover }} style={styles.musicCover} /> : null}
+        </View>
+      </View>
+
+      {/* Alt bilgi */}
+      <View style={styles.bottomInfo}>
+        <Text style={styles.username}>
+          {n.user.username}
+          {n.user.isVerified ? ' ' : ''}
+        </Text>
+        {n.caption ? (
+          <Text style={styles.caption} numberOfLines={2}>
+            {n.caption}
+          </Text>
+        ) : null}
+        <View style={styles.musicRow}>
+          <Ionicons name={n.mediaType === 'image' ? 'image' : 'musical-notes'} size={14} color="#fff" />
+          <Text style={styles.musicText} numberOfLines={1}>
+            {n.mediaType === 'image' ? 'Fotoğraf gönderisi' : n.music.title}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    backgroundColor: '#000',
+  },
+  background: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  actions: {
+    position: 'absolute',
+    right: 10,
+    bottom: 110,
+    alignItems: 'center',
+  },
+  avatarWrap: {
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  avatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 2,
+    borderColor: '#fff',
+  },
+  followBadge: {
+    position: 'absolute',
+    bottom: -8,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FE2C55',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionBtn: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  actionText: {
+    color: '#fff',
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  musicDisc: {
+    marginTop: 6,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 8,
+    borderColor: '#222',
+    overflow: 'hidden',
+  },
+  musicCover: {
+    width: '100%',
+    height: '100%',
+  },
+  bottomInfo: {
+    position: 'absolute',
+    left: 12,
+    right: 80,
+    bottom: 100,
+  },
+  username: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  caption: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 19,
+    marginBottom: 8,
+  },
+  musicRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  musicText: {
+    color: '#fff',
+    fontSize: 13,
+    marginLeft: 6,
+    flex: 1,
+  },
+});
+
+export default VideoCard;

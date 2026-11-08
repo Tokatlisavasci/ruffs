@@ -1,0 +1,33 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Kullanıcı profilleri: herkes okuyabilir (profil/username/avatar gösterimi),
+    // sadece sahibi oluşturabilir/güncelleyebilir.
+    match /users/{userId} {
+      allow read: if true;
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId)
+        // temel alan kısıtlaması (isteğe göre genişletin)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(
+          ['username','displayName','bio','avatar','email','followers','following','likes','createdAt','photoURL']
+        );
+      allow delete: if false;
+    }
+
+    // Gönderiler: herkes okuyabilir (ana sayfa), sadece sahibi yazar/siler.
+    match /videos/{videoId} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // Varsayılan: kapalı
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
