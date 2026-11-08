@@ -144,7 +144,7 @@ export async function uploadUserMedia({ uri, caption, user, mediaType: explicitT
   try {
     up = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
   } catch (e) {
-    if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
+    const em = String(e?.message||''); if (e?.message && !/Network request failed|fetch|Ağ hatası|XMLHttpRequest/i.test(em)) throw e;
     throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
   }
   const mediaUrl = up.playbackUrl || up.mediaUrl;
@@ -224,7 +224,7 @@ export async function uploadMediaAsset({ uri, userId, mediaType = 'image', mimeT
   try {
     data = await uploadMediaToLoopsServer({ uri, caption, mediaType, mimeType });
   } catch (e) {
-    if (e?.message && !String(e.message).includes('Network request failed') && !String(e.message).includes('fetch')) throw e;
+    const em = String(e?.message||''); if (e?.message && !/Network request failed|fetch|Ağ hatası|XMLHttpRequest/i.test(em)) throw e;
     throw new Error('Yükleme sunucusuna bağlanılamadı. Render sunucun çalışıyor mu ve EXPO_PUBLIC_SIGNING_API_URL doğru mu?');
   }
   const url = data?.mediaUrl || data?.playbackUrl || data?.thumbnailUrl;
