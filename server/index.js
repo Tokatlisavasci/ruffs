@@ -215,6 +215,39 @@ app.post('/uploads/video', (req, res) => {
   });
 });
 
+app.post('/videos/view', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+    if (!admin) return res.status(503).json({ error: 'Sunucu yapılandırması eksik (admin)' });
+
+    const { videoId } = req.body || {};
+    if (!videoId || typeof videoId !== 'string') return res.status(400).json({ error: 'videoId gerekli' });
+
+    const db = admin.firestore();
+    const viewId = `${videoId}_${uidInfo.uid}`;
+    const viewRef = db.doc(`views/${viewId}`);
+    const videoRef = db.doc(`videos/${videoId}`);
+
+    const result = await db.runTransaction(async (tx) => {
+      const [viewSnap, videoSnap] = await Promise.all([tx.get(viewRef), tx.get(videoRef)]);
+      if (!videoSnap.exists) throw Object.assign(new Error('Video bulunamadı'), { status: 404 });
+      const vd = videoSnap.data() || {};
+      const cur = typeof vd.viewsCount === 'number' ? vd.viewsCount : 0;
+      if (viewSnap.exists) return { counted: false, viewsCount: cur };
+      tx.set(viewRef, { uid: uidInfo.uid, videoId, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      const next = cur + 1;
+      tx.update(videoRef, { viewsCount: next });
+      return { counted: true, viewsCount: next };
+    });
+
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    return res.status(e.status || 500).json({ error: e?.message || 'İzlenme kaydedilemedi' });
+  }
+});
+
 app.post('/videos/like', async (req, res) => {
   try {
     let uidInfo;

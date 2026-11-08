@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useIsFocused } from '@react-navigation/native';
 import {
   View,
@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike } from '../services/videos';
+import { deriveVideoThumbnail, deriveVideoPlaybackUrl, inferMediaType, toggleVideoLike, recordVideoView } from '../services/videos';
 
 const { width, height } = Dimensions.get('window');
 
@@ -52,6 +52,8 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   const [liked, setLiked] = useState(!!video?.isLiked);
   const [likesCount, setLikesCount] = useState(typeof (video?.likesCount ?? video?.stats?.likes) === 'number' ? (video?.likesCount ?? video?.stats?.likes) : 0);
   const [liking, setLiking] = useState(false);
+  const [viewsCount, setViewsCount] = useState(typeof (video?.viewsCount ?? video?.stats?.views) === 'number' ? (video?.viewsCount ?? video?.stats?.views) : 0);
+  const viewedRef = useRef(false);
   const [saved, setSaved] = useState(!!video?.isBookmarked);
   const [following, setFollowing] = useState(!!n.user?.isFollowing);
 
@@ -60,6 +62,19 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
     const lc = video?.likesCount ?? video?.stats?.likes;
     if (typeof lc === 'number') setLikesCount(lc);
   }, [video?.id, video?.likesCount, video?.stats?.likes]);
+  useEffect(() => { viewedRef.current = false; }, [video?.id]);
+  useEffect(() => {
+    const vc = video?.viewsCount ?? video?.stats?.views;
+    if (typeof vc === 'number') setViewsCount(vc);
+  }, [video?.id, video?.viewsCount, video?.stats?.views]);
+  useEffect(() => {
+    if (!isActive || !isFocused || !video?.id || viewedRef.current) return;
+    viewedRef.current = true;
+    (async () => {
+      const res = await recordVideoView(video.id);
+      if (res && typeof res.viewsCount === 'number') setViewsCount(res.viewsCount);
+    })();
+  }, [isActive, isFocused, video?.id]);
 
   const handleLike = async () => {
     if (liking || !video?.id) return;
@@ -121,6 +136,11 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
               <Ionicons name="add" size={14} color="#fff" />
             </TouchableOpacity>
           )}
+        </View>
+
+        <View style={styles.actionBtn}>
+          <Ionicons name="play-outline" size={30} color="#fff" />
+          <Text style={styles.actionText}>{formatCount(viewsCount)}</Text>
         </View>
 
         <TouchableOpacity style={styles.actionBtn} onPress={handleLike} disabled={liking}>

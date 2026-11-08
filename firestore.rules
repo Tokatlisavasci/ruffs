@@ -31,6 +31,11 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // İzlenmeler: tekilleştirme sunucuda; istemci okumaz/yazmaz.
+    match /views/{viewId} {
+      allow read, create, update, delete: if false;
+    }
+
     // Varsayılan: kapalı
     match /{document=**} {
       allow read, write: if false;

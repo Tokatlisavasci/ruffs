@@ -403,3 +403,21 @@ export async function fetchLikedVideos(uid) {
     return [];
   }
 }
+
+
+export async function recordVideoView(videoId) {
+  if (!videoId) return null;
+  try {
+    const headers = await getSignHeaders();
+    const r = await fetch(`${API_BASE_URL}/videos/view`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ videoId }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data?.ok) return null;
+    return { counted: !!data.counted, viewsCount: typeof data.viewsCount === 'number' ? data.viewsCount : null };
+  } catch {
+    return null;
+  }
+}
