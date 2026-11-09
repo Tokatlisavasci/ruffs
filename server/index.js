@@ -496,6 +496,7 @@ app.post('/uploads/video/delete', async (req, res) => {
 
 let loopsDiscoverCache = { at: 0, items: [] };
 const LOOPS_DISCOVER_TTL_MS = 10 * 60 * 1000;
+const LOOPS_DISCOVER_TAGS = ['music', 'nature', 'travel', 'dog', 'cats'];
 
 function shuffleArr(arr) {
   const a = Array.isArray(arr) ? arr.slice() : [];
@@ -554,41 +555,8 @@ function loopsList(data) {
   if (Array.isArray(data?.data)) return data.data;
   if (Array.isArray(data?.videos)) return data.videos;
   if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data?.tags)) return data.tags;
   return [];
-}
-
-async function fetchLoopsRecommendedRaw() {
-  const cfg = loopsConfig();
-  if (!cfg) return [];
-  const res = await loopsApiGet(cfg, '/api/v0/feed/recommended');
-  if (!res.ok) return [];
-  return loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
-}
-
-async function fetchLoopsExploreMix(limit = 20) {
-  const cfg = loopsConfig();
-  if (!cfg) return [];
-  try {
-    const tagsRes = await loopsApiGet(cfg, '/api/v1/explore/tags');
-    if (!tagsRes.ok) return [];
-    let tags = loopsList(tagsRes.data);
-    if (!tags.length && Array.isArray(tagsRes.data?.tags)) tags = tagsRes.data.tags;
-    if (!tags.length && Array.isArray(tagsRes.data?.data)) tags = tagsRes.data.data;
-    const tagIds = tags.map((t) => (t && typeof t === 'object' ? (t.id ?? t.tag_id ?? t.name ?? t.slug) : t)).filter(Boolean);
-    if (!tagIds.length) return [];
-    const picks = shuffleArr(tagIds).slice(0, 3);
-    const out = [];
-    for (const tid of picks) {
-      const tr = await loopsApiGet(cfg, `/api/v1/explore/tag-feed/${encodeURIComponent(String(tid))}?limit=12`);
-      if (!tr.ok) continue;
-      const items = loopsList(tr.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
-      out.push(...items);
-      if (out.length >= limit) break;
-    }
-    return out;
-  } catch {
-    return [];
-  }
 }
 
 function dedupeDiscover(items) {
@@ -603,16 +571,53 @@ function dedupeDiscover(items) {
   return out;
 }
 
+function matchTagId(tags, wanted) {
+  const w = String(wanted || '').replace(/^#/, '').toLowerCase();
+  for (const t of tags || []) {
+    if (!t || typeof t !== 'object') continue;
+    const name = String(t.name || t.slug || t.tag || t.title || '').replace(/^#/, '').toLowerCase();
+    if (name && name === w) return t.id ?? t.tag_id ?? t.name ?? t.slug;
+  }
+  return null;
+}
+
+async function fetchLoopsTagFeed(cfg, tagRef, limit = 12) {
+  const ref = String(tagRef || '').replace(/^#/, '');
+  if (!ref) return [];
+  const res = await loopsApiGet(cfg, `/api/v1/explore/tag-feed/${encodeURIComponent(ref)}?limit=${encodeURIComponent(String(Math.min(20, Math.max(1, limit))))}`);
+  if (!res.ok) return [];
+  return loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
+}
+
+async function fetchLoopsPreferredTagMix(limit = 20) {
+  const cfg = loopsConfig();
+  if (!cfg) return [];
+  try {
+    let trending = [];
+    const tagsRes = await loopsApiGet(cfg, '/api/v1/explore/tags');
+    if (tagsRes.ok) trending = loopsList(tagsRes.data);
+
+    const wanted = shuffleArr(LOOPS_DISCOVER_TAGS);
+    const out = [];
+    for (const tag of wanted) {
+      if (out.length >= limit * 2) break;
+      const resolved = matchTagId(trending, tag) || tag;
+      const items = await fetchLoopsTagFeed(cfg, resolved, 12);
+      out.push(...items);
+    }
+    return dedupeDiscover(out);
+  } catch {
+    return [];
+  }
+}
+
 async function fetchLoopsDiscover({ limit = 20, force = false } = {}) {
   if (!loopsConfig()) return [];
   const now = Date.now();
   if (!force && loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
     return shuffleArr(loopsDiscoverCache.items).slice(0, limit);
   }
-  let items = [];
-  const [rec, mix] = await Promise.allSettled([fetchLoopsRecommendedRaw(), fetchLoopsExploreMix(limit)]);
-  if (rec.status === 'fulfilled') items.push(...(rec.value || []));
-  if (mix.status === 'fulfilled') items.push(...(mix.value || []));
+  let items = await fetchLoopsPreferredTagMix(limit).catch(() => []);
   items = dedupeDiscover(items);
   if (items.length) loopsDiscoverCache = { at: now, items: shuffleArr(items) };
   else if (force) loopsDiscoverCache = { at: now, items: [] };
