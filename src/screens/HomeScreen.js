@@ -37,11 +37,11 @@ const HomeScreen = () => {
   const appState = useRef(AppState.currentState);
   const lastRefreshAt = useRef(0);
 
-  const load = async ({ forceDiscover = false, scrollTop = false } = {}) => {
+  const load = async ({ scrollTop = false } = {}) => {
     setError(null);
     try {
       const [items, ids, sids, fids] = await Promise.all([
-        fetchFeedVideos({ forceDiscover }),
+        fetchFeedVideos(),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMyFollowingIds(user.id) : Promise.resolve(new Set()),
@@ -69,7 +69,7 @@ const HomeScreen = () => {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
       if (appState.current.match(/inactive|background/) && next === 'active') {
-        load({ forceDiscover: true });
+        load();
       }
       appState.current = next;
     });
@@ -81,13 +81,13 @@ const HomeScreen = () => {
     if (ra && ra !== lastRefreshAt.current) {
       lastRefreshAt.current = ra;
       setRefreshing(true);
-      load({ forceDiscover: true, scrollTop: true }).finally(() => setRefreshing(false));
+      load({ scrollTop: true }).finally(() => setRefreshing(false));
     }
   }, [route?.params?.refreshAt, user?.id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await load({ forceDiscover: true, scrollTop: true });
+    await load({ scrollTop: true });
     setRefreshing(false);
   };
 
@@ -149,7 +149,7 @@ const HomeScreen = () => {
         <View style={styles.center}>
           <Ionicons name="cloud-offline-outline" size={40} color="rgba(255,255,255,0.35)" />
           <Text style={styles.msg}>{error}</Text>
-          <TouchableOpacity onPress={() => load({ forceDiscover: true })} style={styles.retry}><Text style={styles.retryText}>Tekrar dene</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => load()} style={styles.retry}><Text style={styles.retryText}>Tekrar dene</Text></TouchableOpacity>
         </View>
       ) : feed.length === 0 ? (
         <View style={styles.center}>
