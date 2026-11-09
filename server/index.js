@@ -494,7 +494,7 @@ app.post('/uploads/video/delete', async (req, res) => {
 });
 
 
-let loopsDiscoverCache = { at: 0, items: [] };
+let loopsDiscoverCache = { at: 0, items: [], debug: null };
 const LOOPS_DISCOVER_TTL_MS = 10 * 60 * 1000;
 const LOOPS_DISCOVER_TAGS = ['music', 'nature', 'travel', 'dog', 'cats'];
 
@@ -582,19 +582,29 @@ function matchTagId(tags, wanted) {
 }
 
 async function fetchLoopsTagFeed(cfg, tagRef, limit = 12) {
-  const ref = String(tagRef || '').replace(/^#/, '');
-  if (!ref) return [];
+  const ref = String(tagRef || '').replace(/^#/, '').trim();
+  if (!ref) return { items: [], status: 0 };
   const res = await loopsApiGet(cfg, `/api/v1/explore/tag-feed/${encodeURIComponent(ref)}?limit=${encodeURIComponent(String(Math.min(20, Math.max(1, limit))))}`);
-  if (!res.ok) return [];
-  return loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
+  if (!res.ok) return { items: [], status: res.status };
+  return { items: loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean), status: res.status };
+}
+
+async function fetchLoopsRecommendedRaw() {
+  const cfg = loopsConfig();
+  if (!cfg) return { items: [], status: 0 };
+  const res = await loopsApiGet(cfg, '/api/v0/feed/recommended');
+  if (!res.ok) return { items: [], status: res.status };
+  return { items: loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean), status: res.status };
 }
 
 async function fetchLoopsPreferredTagMix(limit = 20) {
   const cfg = loopsConfig();
-  if (!cfg) return [];
+  if (!cfg) return { items: [], debug: { reason: 'no_loops_config' } };
+  const debug = { tags: LOOPS_DISCOVER_TAGS, tried: [], recommended: 0 };
   try {
     let trending = [];
     const tagsRes = await loopsApiGet(cfg, '/api/v1/explore/tags');
+    debug.tagsStatus = tagsRes.status;
     if (tagsRes.ok) trending = loopsList(tagsRes.data);
 
     const wanted = shuffleArr(LOOPS_DISCOVER_TAGS);
@@ -602,27 +612,37 @@ async function fetchLoopsPreferredTagMix(limit = 20) {
     for (const tag of wanted) {
       if (out.length >= limit * 2) break;
       const resolved = matchTagId(trending, tag) || tag;
-      const items = await fetchLoopsTagFeed(cfg, resolved, 12);
-      out.push(...items);
+      let r = await fetchLoopsTagFeed(cfg, resolved, 12);
+      if (!r.items.length && String(resolved) !== String(tag)) r = await fetchLoopsTagFeed(cfg, tag, 12);
+      debug.tried.push({ tag, resolved, status: r.status, count: r.items.length });
+      out.push(...r.items);
     }
-    return dedupeDiscover(out);
-  } catch {
-    return [];
+    let items = dedupeDiscover(out);
+    if (!items.length) {
+      const rec = await fetchLoopsRecommendedRaw().catch(() => ({ items: [], status: 0 }));
+      debug.recommended = rec.items.length;
+      debug.recommendedStatus = rec.status;
+      items = rec.items;
+      debug.fallback = 'recommended';
+    }
+    return { items, debug };
+  } catch (e) {
+    return { items: [], debug: { ...debug, error: 'exception' } };
   }
 }
 
 async function fetchLoopsDiscover({ limit = 20, force = false } = {}) {
-  if (!loopsConfig()) return [];
+  if (!loopsConfig()) return { items: [], debug: { reason: 'no_loops_config' } };
   const now = Date.now();
   if (!force && loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
-    return shuffleArr(loopsDiscoverCache.items).slice(0, limit);
+    return { items: shuffleArr(loopsDiscoverCache.items).slice(0, limit), debug: loopsDiscoverCache.debug, cached: true };
   }
-  let items = await fetchLoopsPreferredTagMix(limit).catch(() => []);
-  items = dedupeDiscover(items);
-  if (items.length) loopsDiscoverCache = { at: now, items: shuffleArr(items) };
-  else if (force) loopsDiscoverCache = { at: now, items: [] };
+  let result = await fetchLoopsPreferredTagMix(limit).catch(() => ({ items: [], debug: { error: 'exception' } }));
+  let items = dedupeDiscover(result.items || []);
+  if (items.length) loopsDiscoverCache = { at: now, items: shuffleArr(items), debug: result.debug };
+  else if (force) loopsDiscoverCache = { at: now, items: [], debug: result.debug };
   const pool = items.length ? items : (loopsDiscoverCache.items || []);
-  return shuffleArr(pool).slice(0, limit);
+  return { items: shuffleArr(pool).slice(0, limit), debug: result.debug || loopsDiscoverCache.debug, cached: false };
 }
 
 app.get('/feed/discover', async (req, res) => {
@@ -632,8 +652,13 @@ app.get('/feed/discover', async (req, res) => {
     if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
     const force = req.query?.force === '1' || req.query?.force === 'true' || req.query?.refresh === '1';
     const lim = Math.min(30, Math.max(1, Number(req.query?.limit) || 20));
-    const items = await fetchLoopsDiscover({ limit: lim, force }).catch(() => []);
-    return res.json({ items: Array.isArray(items) ? items : [] });
+    const wantDebug = req.query?.debug === '1' || req.query?.debug === 'true';
+    const result = await fetchLoopsDiscover({ limit: lim, force }).catch(() => ({ items: [], debug: { error: 'exception' } }));
+    const items = Array.isArray(result?.items) ? result.items : [];
+    const body = { items };
+    if (wantDebug) body.debug = result?.debug || null;
+    console.log('[discover]', JSON.stringify({ uid: uidInfo.uid, force, lim, count: items.length, debug: result?.debug || null }));
+    return res.json(body);
   } catch (e) {
     return res.status(200).json({ items: [] });
   }
