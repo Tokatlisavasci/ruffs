@@ -81,17 +81,19 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
     const vc = video?.viewsCount ?? video?.stats?.views;
     if (typeof vc === 'number') setViewsCount(vc);
   }, [video?.id, video?.viewsCount, video?.stats?.views]);
+  const isExternal = !!(video?.isExternal || String(video?.id || '').startsWith('loops_'));
   useEffect(() => {
-    if (!isActive || !isFocused || !video?.id || viewedRef.current) return;
+    if (isExternal || !isActive || !isFocused || !video?.id || viewedRef.current) return;
     viewedRef.current = true;
     (async () => {
       const res = await recordVideoView(video.id);
       if (res && typeof res.viewsCount === 'number') setViewsCount(res.viewsCount);
     })();
-  }, [isActive, isFocused, video?.id]);
+  }, [isActive, isFocused, video?.id, isExternal]);
 
   const handleLike = async () => {
     if (liking || !video?.id) return;
+    if (isExternal) { setLiked((v) => !v); return; }
     const prevLiked = liked;
     const prevCount = likesCount;
     const nextLiked = !prevLiked;
@@ -113,6 +115,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
 
   const handleSave = async () => {
     if (saving || !video?.id) return;
+    if (isExternal) { setSaved((v) => !v); return; }
     const prev = saved;
     const prevCount = savesCount;
     const next = !prev;
@@ -133,7 +136,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   };
 
   const authorUid = n.user?.uid || video?.uid;
-  const canFollow = !!authorUid && authorUid !== me?.id;
+  const canFollow = !isExternal && !!authorUid && authorUid !== me?.id;
   const openProfile = () => {
     if (!authorUid) return;
     const params = { userId: authorUid };

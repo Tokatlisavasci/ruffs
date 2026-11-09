@@ -493,6 +493,72 @@ app.post('/uploads/video/delete', async (req, res) => {
   }
 });
 
+
+let loopsDiscoverCache = { at: 0, items: [] };
+const LOOPS_DISCOVER_TTL_MS = 10 * 60 * 1000;
+
+function normalizeLoopsDiscoverItem(v) {
+  if (!v || typeof v !== 'object') return null;
+  const media = v.media || {};
+  const src = media.src_url || media.hls_url || v.mediaUrl || v.videoUrl || null;
+  if (!src) return null;
+  const acc = v.account || {};
+  const thumb = media.thumbnail || v.thumbnailUrl || src;
+  return {
+    id: `loops_${v.id}`,
+    externalId: v.id || null,
+    provider: 'loops-discover',
+    isExternal: true,
+    uid: null,
+    username: acc.username || acc.name || 'loops',
+    displayName: acc.name || acc.username || 'Loops',
+    avatar: acc.avatar || null,
+    mediaType: 'video',
+    mediaUrl: src,
+    videoUrl: src,
+    thumbnailUrl: thumb,
+    caption: v.caption || '',
+    likesCount: typeof v.likes === 'number' ? v.likes : 0,
+    commentsCount: typeof v.comments === 'number' ? v.comments : 0,
+    sharesCount: typeof v.shares === 'number' ? v.shares : 0,
+    savesCount: typeof v.bookmarks === 'number' ? v.bookmarks : 0,
+    viewsCount: 0,
+    loopsUrl: v.url || null,
+    createdAt: v.created_at || null,
+  };
+}
+
+async function fetchLoopsRecommended({ limit = 20 } = {}) {
+  const cfg = loopsConfig();
+  if (!cfg) return [];
+  const now = Date.now();
+  if (loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
+    return loopsDiscoverCache.items.slice(0, limit);
+  }
+  const r = await fetch(`${cfg.base}/api/v0/feed/recommended`, {
+    headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/json' },
+  });
+  if (r.status === 429) return (loopsDiscoverCache.items || []).slice(0, limit);
+  if (!r.ok) { loopsDiscoverCache = { at: now, items: [] }; return []; }
+  const data = await r.json().catch(() => ({}));
+  const arr = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.videos) ? data.videos : []));
+  const items = arr.map(normalizeLoopsDiscoverItem).filter(Boolean);
+  loopsDiscoverCache = { at: now, items };
+  return items.slice(0, limit);
+}
+
+app.get('/feed/discover', async (req, res) => {
+  try {
+    let uidInfo;
+    try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
+    if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
+    const items = await fetchLoopsRecommended({ limit: 20 }).catch(() => []);
+    return res.json({ items: Array.isArray(items) ? items : [] });
+  } catch (e) {
+    return res.status(200).json({ items: [] });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Ruffs API http://localhost:${PORT} (Loops configured: ${!!loopsConfig()})`);
 });

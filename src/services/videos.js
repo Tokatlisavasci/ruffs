@@ -191,23 +191,51 @@ export async function fetchUserVideos(uid) {
   return items;
 }
 
-export async function fetchFeedVideos() {
-  if (!isFirebaseConfigured || !db) return [];
+async function fetchLoopsDiscoverFallback(limit = 20) {
+  if (!API_BASE_URL) return [];
   try {
-    const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  } catch (e) {
-    // orderBy createdAt bazen index/alan durumunda sorun çıkarabilir; fallback: createdAt olmadan çekip sırala.
-    const snap = await getDocs(collection(db, 'videos'));
-    const items = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    items.sort((a, b) => {
-      const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
-      const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
-      return tb - ta;
-    });
-    return items;
+    const headers = await getSignHeaders();
+    const r = await fetch(`${API_BASE_URL}/feed/discover?limit=${encodeURIComponent(String(limit))}`, { headers });
+    if (!r.ok) return [];
+    const data = await r.json().catch(() => ({}));
+    return Array.isArray(data?.items) ? data.items : [];
+  } catch {
+    return [];
   }
+}
+
+export async function fetchFeedVideos() {
+  let own = [];
+  if (isFirebaseConfigured && db) {
+    try {
+      const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'));
+      const snap = await getDocs(q);
+      own = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    } catch (e) {
+      // orderBy createdAt bazen index/alan durumunda sorun çıkarabilir; fallback: createdAt olmadan çekip sırala.
+      try {
+        const snap = await getDocs(collection(db, 'videos'));
+        own = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        own.sort((a, b) => {
+          const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : (a.createdAt ? new Date(a.createdAt).getTime() : 0);
+          const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : (b.createdAt ? new Date(b.createdAt).getTime() : 0);
+          return tb - ta;
+        });
+      } catch { own = []; }
+    }
+  }
+  if (own.length >= 8) return own;
+  const extra = await fetchLoopsDiscoverFallback(Math.max(10, 20 - own.length));
+  if (!extra.length) return own;
+  const seen = new Set(own.map((v) => String(v?.loopsId || v?.externalId || v?.id || '')));
+  const merged = [...own];
+  for (const v of extra) {
+    const k = String(v?.loopsId || v?.externalId || v?.id || '');
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    merged.push(v);
+  }
+  return merged;
 }
 
 
