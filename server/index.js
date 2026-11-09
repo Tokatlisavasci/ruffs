@@ -497,54 +497,127 @@ app.post('/uploads/video/delete', async (req, res) => {
 let loopsDiscoverCache = { at: 0, items: [] };
 const LOOPS_DISCOVER_TTL_MS = 10 * 60 * 1000;
 
-function normalizeLoopsDiscoverItem(v) {
-  if (!v || typeof v !== 'object') return null;
+function shuffleArr(arr) {
+  const a = Array.isArray(arr) ? arr.slice() : [];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function normalizeLoopsDiscoverItem(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const v = (raw.video && typeof raw.video === 'object') ? raw.video : raw;
   const media = v.media || {};
-  const src = media.src_url || media.hls_url || v.mediaUrl || v.videoUrl || null;
+  const src = media.src_url || media.hls_url || media.mp4_url || v.mediaUrl || v.videoUrl || v.src_url || null;
   if (!src) return null;
-  const acc = v.account || {};
-  const thumb = media.thumbnail || v.thumbnailUrl || src;
+  const acc = v.account || v.user || v.profile || {};
+  const thumb = media.thumbnail || media.poster || v.thumbnailUrl || v.thumbnail || src;
+  const id = v.id ?? raw.id ?? raw.video_id;
+  if (!id) return null;
   return {
-    id: `loops_${v.id}`,
-    externalId: v.id || null,
+    id: `loops_${id}`,
+    externalId: id,
     provider: 'loops-discover',
     isExternal: true,
     uid: null,
-    username: acc.username || acc.name || 'loops',
-    displayName: acc.name || acc.username || 'Loops',
-    avatar: acc.avatar || null,
+    username: acc.username || acc.acct || acc.name || 'loops',
+    displayName: acc.name || acc.display_name || acc.username || 'Loops',
+    avatar: acc.avatar || acc.avatar_url || null,
     mediaType: 'video',
     mediaUrl: src,
     videoUrl: src,
     thumbnailUrl: thumb,
-    caption: v.caption || '',
-    likesCount: typeof v.likes === 'number' ? v.likes : 0,
-    commentsCount: typeof v.comments === 'number' ? v.comments : 0,
+    caption: v.caption || v.description || '',
+    likesCount: typeof v.likes === 'number' ? v.likes : (typeof v.likes_count === 'number' ? v.likes_count : 0),
+    commentsCount: typeof v.comments === 'number' ? v.comments : (typeof v.comments_count === 'number' ? v.comments_count : 0),
     sharesCount: typeof v.shares === 'number' ? v.shares : 0,
     savesCount: typeof v.bookmarks === 'number' ? v.bookmarks : 0,
     viewsCount: 0,
-    loopsUrl: v.url || null,
-    createdAt: v.created_at || null,
+    loopsUrl: v.url || v.link || null,
+    createdAt: v.created_at || v.createdAt || null,
   };
 }
 
-async function fetchLoopsRecommended({ limit = 20, force = false } = {}) {
-  const cfg = loopsConfig();
-  if (!cfg) return [];
-  const now = Date.now();
-  if (!force && loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
-    return loopsDiscoverCache.items.slice(0, limit);
-  }
-  const r = await fetch(`${cfg.base}/api/v0/feed/recommended`, {
+async function loopsApiGet(cfg, path) {
+  const r = await fetch(`${cfg.base}${path}`, {
     headers: { Authorization: `Bearer ${cfg.token}`, Accept: 'application/json' },
   });
-  if (r.status === 429) return (loopsDiscoverCache.items || []).slice(0, limit);
-  if (!r.ok) { loopsDiscoverCache = { at: now, items: [] }; return []; }
+  if (r.status === 429) return { rateLimited: true, ok: false, status: 429, data: null };
   const data = await r.json().catch(() => ({}));
-  const arr = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : (Array.isArray(data?.videos) ? data.videos : []));
-  const items = arr.map(normalizeLoopsDiscoverItem).filter(Boolean);
-  loopsDiscoverCache = { at: now, items };
-  return items.slice(0, limit);
+  return { ok: r.ok, status: r.status, data };
+}
+
+function loopsList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.data)) return data.data;
+  if (Array.isArray(data?.videos)) return data.videos;
+  if (Array.isArray(data?.items)) return data.items;
+  return [];
+}
+
+async function fetchLoopsRecommendedRaw() {
+  const cfg = loopsConfig();
+  if (!cfg) return [];
+  const res = await loopsApiGet(cfg, '/api/v0/feed/recommended');
+  if (!res.ok) return [];
+  return loopsList(res.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
+}
+
+async function fetchLoopsExploreMix(limit = 20) {
+  const cfg = loopsConfig();
+  if (!cfg) return [];
+  try {
+    const tagsRes = await loopsApiGet(cfg, '/api/v1/explore/tags');
+    if (!tagsRes.ok) return [];
+    let tags = loopsList(tagsRes.data);
+    if (!tags.length && Array.isArray(tagsRes.data?.tags)) tags = tagsRes.data.tags;
+    if (!tags.length && Array.isArray(tagsRes.data?.data)) tags = tagsRes.data.data;
+    const tagIds = tags.map((t) => (t && typeof t === 'object' ? (t.id ?? t.tag_id ?? t.name ?? t.slug) : t)).filter(Boolean);
+    if (!tagIds.length) return [];
+    const picks = shuffleArr(tagIds).slice(0, 3);
+    const out = [];
+    for (const tid of picks) {
+      const tr = await loopsApiGet(cfg, `/api/v1/explore/tag-feed/${encodeURIComponent(String(tid))}?limit=12`);
+      if (!tr.ok) continue;
+      const items = loopsList(tr.data).map(normalizeLoopsDiscoverItem).filter(Boolean);
+      out.push(...items);
+      if (out.length >= limit) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function dedupeDiscover(items) {
+  const seen = new Set();
+  const out = [];
+  for (const it of items || []) {
+    const k = String(it?.externalId || it?.id || '');
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
+}
+
+async function fetchLoopsDiscover({ limit = 20, force = false } = {}) {
+  if (!loopsConfig()) return [];
+  const now = Date.now();
+  if (!force && loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
+    return shuffleArr(loopsDiscoverCache.items).slice(0, limit);
+  }
+  let items = [];
+  const [rec, mix] = await Promise.allSettled([fetchLoopsRecommendedRaw(), fetchLoopsExploreMix(limit)]);
+  if (rec.status === 'fulfilled') items.push(...(rec.value || []));
+  if (mix.status === 'fulfilled') items.push(...(mix.value || []));
+  items = dedupeDiscover(items);
+  if (items.length) loopsDiscoverCache = { at: now, items: shuffleArr(items) };
+  else if (force) loopsDiscoverCache = { at: now, items: [] };
+  const pool = items.length ? items : (loopsDiscoverCache.items || []);
+  return shuffleArr(pool).slice(0, limit);
 }
 
 app.get('/feed/discover', async (req, res) => {
@@ -554,7 +627,7 @@ app.get('/feed/discover', async (req, res) => {
     if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
     const force = req.query?.force === '1' || req.query?.force === 'true' || req.query?.refresh === '1';
     const lim = Math.min(30, Math.max(1, Number(req.query?.limit) || 20));
-    const items = await fetchLoopsRecommended({ limit: lim, force }).catch(() => []);
+    const items = await fetchLoopsDiscover({ limit: lim, force }).catch(() => []);
     return res.json({ items: Array.isArray(items) ? items : [] });
   } catch (e) {
     return res.status(200).json({ items: [] });
