@@ -89,8 +89,13 @@ const LiquidGlassTabBar = ({ state, navigation }) => {
     }).start();
 
     const route = visible[safeIndex]?.route;
-    if (navigate && route && route.key !== focusedRoute?.key) {
+    if (!navigate || !route) return;
+    if (route.key !== focusedRoute?.key) {
       navigation.navigate(route.name);
+      return;
+    }
+    if (route.name === 'Ana') {
+      try { navigation.navigate('Ana', { refreshAt: Date.now() }); } catch {}
     }
   };
 

@@ -528,11 +528,11 @@ function normalizeLoopsDiscoverItem(v) {
   };
 }
 
-async function fetchLoopsRecommended({ limit = 20 } = {}) {
+async function fetchLoopsRecommended({ limit = 20, force = false } = {}) {
   const cfg = loopsConfig();
   if (!cfg) return [];
   const now = Date.now();
-  if (loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
+  if (!force && loopsDiscoverCache.items.length && (now - loopsDiscoverCache.at) < LOOPS_DISCOVER_TTL_MS) {
     return loopsDiscoverCache.items.slice(0, limit);
   }
   const r = await fetch(`${cfg.base}/api/v0/feed/recommended`, {
@@ -552,7 +552,9 @@ app.get('/feed/discover', async (req, res) => {
     let uidInfo;
     try { uidInfo = await resolveUid(req); } catch (e) { return res.status(e.status || 401).json({ error: e.message || 'Yetkisiz' }); }
     if (!uidInfo?.uid) return res.status(401).json({ error: 'Oturum gerekli' });
-    const items = await fetchLoopsRecommended({ limit: 20 }).catch(() => []);
+    const force = req.query?.force === '1' || req.query?.force === 'true' || req.query?.refresh === '1';
+    const lim = Math.min(30, Math.max(1, Number(req.query?.limit) || 20));
+    const items = await fetchLoopsRecommended({ limit: lim, force }).catch(() => []);
     return res.json({ items: Array.isArray(items) ? items : [] });
   } catch (e) {
     return res.status(200).json({ items: [] });

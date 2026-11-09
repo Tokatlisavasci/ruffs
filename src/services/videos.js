@@ -191,11 +191,12 @@ export async function fetchUserVideos(uid) {
   return items;
 }
 
-async function fetchLoopsDiscoverFallback(limit = 20) {
+async function fetchLoopsDiscoverFallback(limit = 20, force = false) {
   if (!API_BASE_URL) return [];
   try {
     const headers = await getSignHeaders();
-    const r = await fetch(`${API_BASE_URL}/feed/discover?limit=${encodeURIComponent(String(limit))}`, { headers });
+    const q = `limit=${encodeURIComponent(String(limit))}${force ? '&force=1' : ''}`;
+    const r = await fetch(`${API_BASE_URL}/feed/discover?${q}`, { headers });
     if (!r.ok) return [];
     const data = await r.json().catch(() => ({}));
     return Array.isArray(data?.items) ? data.items : [];
@@ -204,7 +205,7 @@ async function fetchLoopsDiscoverFallback(limit = 20) {
   }
 }
 
-export async function fetchFeedVideos() {
+export async function fetchFeedVideos({ forceDiscover = false } = {}) {
   let own = [];
   if (isFirebaseConfigured && db) {
     try {
@@ -225,7 +226,7 @@ export async function fetchFeedVideos() {
     }
   }
   if (own.length >= 8) return own;
-  const extra = await fetchLoopsDiscoverFallback(Math.max(10, 20 - own.length));
+  const extra = await fetchLoopsDiscoverFallback(Math.max(10, 20 - own.length), !!forceDiscover);
   if (!extra.length) return own;
   const seen = new Set(own.map((v) => String(v?.loopsId || v?.externalId || v?.id || '')));
   const merged = [...own];

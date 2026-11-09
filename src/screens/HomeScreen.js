@@ -9,9 +9,10 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
 import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
@@ -20,6 +21,7 @@ const { height } = Dimensions.get('window');
 
 const HomeScreen = () => {
   const navigation = useNavigation();
+  const route = useRoute();
   const { user } = useAuth();
   const [likedIds, setLikedIds] = useState(new Set());
   const [savedIds, setSavedIds] = useState(new Set());
@@ -31,12 +33,15 @@ const HomeScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
+  const listRef = useRef(null);
+  const appState = useRef(AppState.currentState);
+  const lastRefreshAt = useRef(0);
 
-  const load = async () => {
+  const load = async ({ forceDiscover = false, scrollTop = false } = {}) => {
     setError(null);
     try {
       const [items, ids, sids, fids] = await Promise.all([
-        fetchFeedVideos(),
+        fetchFeedVideos({ forceDiscover }),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMyFollowingIds(user.id) : Promise.resolve(new Set()),
@@ -45,6 +50,10 @@ const HomeScreen = () => {
       setSavedIds(sids || new Set());
       setFollowingIds(fids || new Set());
       setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id), isFollowing: fids?.has?.(v.uid || v.userId) })));
+      if (scrollTop) {
+        setCurrentIndex(0);
+        try { listRef.current?.scrollToOffset?.({ offset: 0, animated: false }); } catch {}
+      }
     } catch (e) {
       const code = String(e?.code || '');
       if (code.includes('permission-denied')) setError('Videolar yüklenemedi (izin). Firestore "videos" kurallarını kontrol edin.');
@@ -57,9 +66,28 @@ const HomeScreen = () => {
 
   useEffect(() => { load(); }, [user?.id]);
 
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (appState.current.match(/inactive|background/) && next === 'active') {
+        load({ forceDiscover: true });
+      }
+      appState.current = next;
+    });
+    return () => sub?.remove?.();
+  }, [user?.id]);
+
+  useEffect(() => {
+    const ra = route?.params?.refreshAt;
+    if (ra && ra !== lastRefreshAt.current) {
+      lastRefreshAt.current = ra;
+      setRefreshing(true);
+      load({ forceDiscover: true, scrollTop: true }).finally(() => setRefreshing(false));
+    }
+  }, [route?.params?.refreshAt, user?.id]);
+
   const onRefresh = async () => {
     setRefreshing(true);
-    await load();
+    await load({ forceDiscover: true, scrollTop: true });
     setRefreshing(false);
   };
 
@@ -121,7 +149,7 @@ const HomeScreen = () => {
         <View style={styles.center}>
           <Ionicons name="cloud-offline-outline" size={40} color="rgba(255,255,255,0.35)" />
           <Text style={styles.msg}>{error}</Text>
-          <TouchableOpacity onPress={load} style={styles.retry}><Text style={styles.retryText}>Tekrar dene</Text></TouchableOpacity>
+          <TouchableOpacity onPress={() => load({ forceDiscover: true })} style={styles.retry}><Text style={styles.retryText}>Tekrar dene</Text></TouchableOpacity>
         </View>
       ) : feed.length === 0 ? (
         <View style={styles.center}>
@@ -131,6 +159,7 @@ const HomeScreen = () => {
         </View>
       ) : (
         <FlatList
+          ref={listRef}
           data={feed}
           renderItem={renderItem}
           keyExtractor={(item, i) => item.id || String(i)}
