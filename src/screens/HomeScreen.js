@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
+import NativeAdFeedCard from '../components/NativeAdFeedCard';
 import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
@@ -49,7 +50,8 @@ const HomeScreen = () => {
       setLikedIds(ids || new Set());
       setSavedIds(sids || new Set());
       setFollowingIds(fids || new Set());
-      setFeed((items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id), isFollowing: fids?.has?.(v.uid || v.userId) })));
+      const merged = (items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id), isFollowing: fids?.has?.(v.uid || v.userId) }));
+      setFeed(insertAds(merged));
       if (scrollTop) {
         setCurrentIndex(0);
         try { listRef.current?.scrollToOffset?.({ offset: 0, animated: false }); } catch {}
@@ -112,8 +114,25 @@ const HomeScreen = () => {
     }
   }).current;
 
+  const insertAds = (items) => {
+    const out = [];
+    const every = 4; // her 4 videodan sonra 1 reklam
+    (items || []).forEach((v, i) => {
+      out.push(v);
+      if ((i + 1) % every === 0) {
+        out.push({ __ad: true, id: `ad-${i + 1}` });
+      }
+    });
+    return out;
+  };
+
   const renderItem = useCallback(
-    ({ item, index }) => <VideoCard video={item} isActive={index === currentIndex}  onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} onFollowChanged={handleFollowChanged} />,
+    ({ item, index }) => {
+      if (item?.__ad) {
+        return <NativeAdFeedCard isActive={index === currentIndex} />;
+      }
+      return <VideoCard video={item} isActive={index === currentIndex} onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} onFollowChanged={handleFollowChanged} />;
+    },
     [currentIndex]
   );
 

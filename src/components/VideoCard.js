@@ -85,7 +85,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   useEffect(() => {
     if (!isActive || !isFocused || !video?.id || viewedRef.current) return;
     viewedRef.current = true;
-    markVideoViewed(video.id).then((r) => {
+    recordVideoView(video.id).then((r) => {
       if (!r?.noop) setViewsCount((n) => (typeof n === 'number' ? n + 1 : n));
     }).catch(() => {});
   }, [isActive, isFocused, video?.id]);
