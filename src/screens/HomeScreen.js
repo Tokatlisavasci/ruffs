@@ -16,6 +16,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
 import NativeAdFeedCard from '../components/NativeAdFeedCard';
+import FeedErrorBoundary from '../components/FeedErrorBoundary';
 import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
@@ -137,7 +138,11 @@ const HomeScreen = () => {
   const renderItem = useCallback(
     ({ item, index }) => {
       if (item?.__ad) {
-        return <NativeAdFeedCard isActive={index === currentIndex} />;
+        return (
+          <FeedErrorBoundary>
+            <NativeAdFeedCard isActive={index === currentIndex} />
+          </FeedErrorBoundary>
+        );
       }
       return <VideoCard video={item} isActive={index === currentIndex} onLikeChanged={handleLikeChanged} onSaveChanged={handleSaveChanged} onFollowChanged={handleFollowChanged} />;
     },
