@@ -11,6 +11,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNotifications } from '../context/NotificationsContext';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -29,6 +30,8 @@ const TAB_ICONS = {
 const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
 
 const LiquidGlassTabBar = ({ state, navigation }) => {
+  const insets = useSafeAreaInsets();
+  const bottomOffset = Math.max(insets.bottom, Platform.OS === 'ios' ? 8 : 10) + 8;
   const { unreadCount } = useNotifications() || {};
   const visible = state.routes
     .map((route, routeIndex) => ({ route, routeIndex }))
@@ -150,7 +153,7 @@ const LiquidGlassTabBar = ({ state, navigation }) => {
   ).current;
 
   return (
-    <View style={styles.wrapper} pointerEvents="box-none">
+    <View style={[styles.wrapper, { bottom: bottomOffset }]} pointerEvents="box-none">
       <View
         style={styles.bar}
         onLayout={(e) => setBarLayoutW(e.nativeEvent.layout.width)}

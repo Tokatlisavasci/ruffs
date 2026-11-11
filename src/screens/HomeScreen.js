@@ -33,7 +33,10 @@ const HomeScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
-  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 80 }).current;
+  const viewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 80,
+    minimumViewTime: 120,
+  }).current;
   const listRef = useRef(null);
   const appState = useRef(AppState.currentState);
   const lastRefreshAt = useRef(0);
@@ -109,8 +112,13 @@ const HomeScreen = () => {
   };
 
   const onViewableItemsChanged = useRef(({ viewableItems }) => {
-    if (viewableItems.length > 0) {
-      setCurrentIndex(viewableItems[0].index ?? 0);
+    const visible = (viewableItems || []).filter((v) => v.isViewable);
+    if (visible.length === 0) return;
+    // Prefer the item closest to the middle of the visible set to avoid rapid flips
+    const pick = visible.length === 1 ? visible[0] : visible[Math.floor(visible.length / 2)];
+    const idx = pick?.index;
+    if (typeof idx === 'number') {
+      setCurrentIndex((prev) => (prev === idx ? prev : idx));
     }
   }).current;
 
@@ -187,6 +195,11 @@ const HomeScreen = () => {
           decelerationRate="fast"
           snapToInterval={height}
           snapToAlignment="start"
+          disableIntervalMomentum
+          windowSize={3}
+          initialNumToRender={1}
+          maxToRenderPerBatch={2}
+          removeClippedSubviews
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
           getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
