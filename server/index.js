@@ -602,10 +602,11 @@ app.get('/trending', async (req, res) => {
         ensurePoolGrowing({
           maxCaptures: 1,
           target: Math.max(count * 2, 24),
-          captureTimeoutMs: 25000,
+          // Soğuk başlangıçta Chromium'un açılması da bu süreye sığmalı.
+          captureTimeoutMs: 50000,
           minIntervalMs: 0,
         }).catch(() => 0),
-        new Promise((resolve) => setTimeout(() => resolve(-1), 32000)),
+        new Promise((resolve) => setTimeout(() => resolve(-1), 55000)),
       ]);
     } else if (cursor + count > trendingPool.items.length) {
       // Havuz tükeniyor: yeni videoları bekle ama istemciyi çok bekletme.
