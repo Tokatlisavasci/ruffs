@@ -558,7 +558,27 @@ app.use(express.json());
 const PORT = Number(process.env.PORT) || 4000;
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, provider: 'loops', loopsConfigured: !!loopsConfig() });
+  // Chromium teşhisi: trendlerin neden boş döndüğünü anlamak için.
+  const chromium = { state: chromiumInstallState };
+  try {
+    const pw = loadPlaywright();
+    if (pw?.chromium) {
+      const execPath = pw.chromium.executablePath();
+      chromium.path = execPath || null;
+      chromium.exists = !!(execPath && require('fs').existsSync(execPath));
+    } else {
+      chromium.missing = true;
+    }
+  } catch (e) {
+    chromium.error = String(e?.message || e);
+  }
+  res.json({
+    ok: true,
+    provider: 'loops',
+    loopsConfigured: !!loopsConfig(),
+    browsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH || null,
+    chromium,
+  });
 });
 
 // Otomatik TikTok trendleri: imleçli (cursor) sonsuz akış.
