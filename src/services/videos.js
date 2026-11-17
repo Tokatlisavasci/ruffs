@@ -16,6 +16,7 @@ import { Platform } from 'react-native';
 import { db, isFirebaseConfigured, auth } from '../config/firebase';
 import { API_BASE_URL } from '../api/config';
 
+
 const IMAGE_EXT = /\.(jpe?g|png|webp|heic|heif|gif)$/i;
 
 export function inferMediaType({ uri, mimeType, explicit } = {}) {
@@ -203,6 +204,26 @@ async function fetchLoopsDiscoverFallback(limit = 20, force = false) {
   } catch {
     return [];
   }
+}
+
+export async function fetchTrendingVideos({ count = 20, refresh = false } = {}) {
+  if (!API_BASE_URL) {
+    throw new Error('Sunucu adresi tanımlı değil (EXPO_PUBLIC_SIGNING_API_URL).');
+  }
+  const params = new URLSearchParams({ count: String(count) });
+  if (refresh) params.set('refresh', '1');
+  const res = await fetch(`${API_BASE_URL}/trending?${params.toString()}`, {
+    headers: { Accept: 'application/json' },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data?.ok === false) {
+    throw Object.assign(new Error(data?.error || `Trendler alınamadı (HTTP ${res.status})`), { status: res.status });
+  }
+  return {
+    videos: Array.isArray(data?.videos) ? data.videos : [],
+    fetchedAt: data?.fetchedAt || null,
+    stale: !!data?.stale,
+  };
 }
 
 export async function fetchFeedVideos({ forceDiscover = false } = {}) {

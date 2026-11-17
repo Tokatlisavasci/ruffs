@@ -170,6 +170,153 @@ async function resolveUid(req) {
   return null;
 }
 
+// --- TikTok trend videoları (traceryn/tiktok-sdk) ---
+// SDK saf ESM olduğu için CommonJS sunucudan dinamik import ile yüklenir.
+const TRENDING_TTL_MS = Number(process.env.TIKTOK_TRENDING_TTL_MS) || 10 * 60 * 1000;
+let tiktokClient = null;
+let tiktokSession = null;
+let tiktokSdkPromise = null;
+let trendingCache = { at: 0, items: [] };
+
+async function getTikTokClient() {
+  if (tiktokClient) return tiktokClient;
+  if (!tiktokSdkPromise) tiktokSdkPromise = import('@traceryn/tiktok-sdk');
+  let sdk;
+  try {
+    sdk = await tiktokSdkPromise;
+  } catch (e) {
+    tiktokSdkPromise = null;
+    throw Object.assign(new Error(`TikTok SDK yüklenemedi: ${e?.message || e}`), { status: 503 });
+  }
+
+  if (!tiktokSession && process.env.TIKTOK_USE_SESSION === 'true') {
+    try {
+      tiktokSession = new sdk.PlaywrightSession({ headless: true });
+      await tiktokSession.init();
+      console.log('TikTok Playwright session hazır');
+    } catch (e) {
+      console.warn('TikTok Playwright session başlatılamadı:', e?.message || e);
+      tiktokSession = null;
+    }
+  }
+
+  tiktokClient = new sdk.TikTokClient({
+    timeout: Number(process.env.TIKTOK_TIMEOUT_MS) || 15000,
+    maxRetries: 1,
+    rateLimit: 1,
+    concurrency: 1,
+    cacheTTL: 60 * 1000,
+    ...(tiktokSession ? { session: tiktokSession } : {}),
+  });
+  return tiktokClient;
+}
+
+function firstString(...values) {
+  for (const v of values) {
+    if (typeof v === 'string' && v.trim()) return v;
+    if (Array.isArray(v)) {
+      const hit = v.find((x) => typeof x === 'string' && x.trim());
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function pickTrendingPlayUrl(raw) {
+  const video = raw?.video || {};
+  const bitrateUrls = Array.isArray(video?.bitrateInfo)
+    ? video.bitrateInfo.map((b) => b?.PlayAddr?.UrlList?.[0] || b?.playAddr?.[0] || b?.playAddr)
+    : [];
+  return firstString(video?.playAddr, video?.downloadAddr, ...bitrateUrls);
+}
+
+function normalizeTrendingVideo(item) {
+  const raw = item?.raw || {};
+  const author = raw?.author || {};
+  const uniqueId = String(author.uniqueId || '').replace(/^@/, '');
+  const id = String(item?.id || '');
+  const cover = firstString(item?.cover, raw?.video?.cover, raw?.video?.originCover, raw?.video?.dynamicCover);
+  return {
+    id,
+    desc: String(item?.desc || ''),
+    createTime: item?.createTime || null,
+    duration: Number(item?.duration) || 0,
+    stats: {
+      views: Number(item?.playCount ?? raw?.stats?.playCount ?? 0),
+      likes: Number(item?.diggCount ?? raw?.stats?.diggCount ?? 0),
+      comments: Number(item?.commentCount ?? raw?.stats?.commentCount ?? 0),
+      shares: Number(raw?.stats?.shareCount ?? 0),
+    },
+    cover,
+    playUrl: pickTrendingPlayUrl(raw),
+    webUrl: uniqueId && id ? `https://www.tiktok.com/@${uniqueId}/video/${id}` : null,
+    music: raw?.music?.title ? String(raw.music.title) : null,
+    author: {
+      uniqueId,
+      nickname: String(author.nickname || uniqueId || 'TikTok'),
+      avatar: firstString(author.avatarThumb, author.avatarMedium, author.avatarLarger, author.avatar),
+      verified: !!author.verified,
+    },
+  };
+}
+
+// TikTok /api/recommend/item_list imzalı istek istediği için bazı günlerde boş dönebiliyor.
+// O durumda TikTok'un kendi resmi (küratörlü) çalma listelerinden trend benzeri içerik toplar.
+// TIKTOK_PLAYLIST_FALLBACK=false ile kapatılabilir.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} zaman aşımı`)), ms);
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+async function fetchTrendingFromPlaylists(client, limit = 4) {
+  const playlists = await withTimeout(client.getUserPlaylists('tiktok'), 20000, 'playlist listesi');
+  const list = Array.isArray(playlists?.playlists) ? playlists.playlists : [];
+  const usable = list.filter((p) => p?.id && Number(p?.videoCount) > 0).slice(0, limit);
+  if (!usable.length) return [];
+
+  const seen = new Set();
+  const items = [];
+  // SDK'nın iç kuyruğu paralel isteklerde kilitleniyor; sırayla çekiyoruz.
+  for (const p of usable) {
+    try {
+      const res = await withTimeout(client.getPlaylistVideos(p.id, 0, 30), 25000, `çalma listesi ${p.id}`);
+      for (const raw of res?.videos || []) {
+        const v = normalizeTrendingVideo(raw);
+        if (!v.id || seen.has(v.id)) continue;
+        if (!v.cover && !v.playUrl) continue;
+        seen.add(v.id);
+        items.push(v);
+      }
+    } catch (e) {
+      console.warn('TikTok çalma listesi atlandı:', p?.id, e?.message || e);
+    }
+  }
+  items.sort((a, b) => (b?.stats?.views || 0) - (a?.stats?.views || 0));
+  return items;
+}
+
+async function fetchTikTokTrending(count = 20) {
+  const client = await getTikTokClient();
+  try {
+    const result = await withTimeout(client.getTrendingVideos(count), 25000, 'TikTok recommend');
+    const list = Array.isArray(result?.videos) ? result.videos : [];
+    const normalized = list.map(normalizeTrendingVideo).filter((v) => v.id && (v.cover || v.playUrl));
+    if (normalized.length) return { items: normalized, strategy: 'recommend' };
+  } catch (e) {
+    console.warn('TikTok recommend hatası, çalma listesi yedeğine geçiliyor:', e?.message || e);
+  }
+
+  if (process.env.TIKTOK_PLAYLIST_FALLBACK === 'false') return { items: [], strategy: 'recommend' };
+
+  const playlistLimit = Math.min(Math.max(Number(process.env.TIKTOK_PLAYLIST_LIMIT) || 4, 1), 5);
+  const fallback = await fetchTrendingFromPlaylists(client, playlistLimit);
+  return { items: fallback, strategy: fallback.length ? 'playlists' : 'recommend' };
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -178,6 +325,67 @@ const PORT = Number(process.env.PORT) || 4000;
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, provider: 'loops', loopsConfigured: !!loopsConfig() });
+});
+
+// Otomatik TikTok trendleri: sunucu tarafında önbelleklenir (varsayılan 10 dk).
+app.get('/trending', async (req, res) => {
+  const force = req.query.refresh === '1' || req.query.refresh === 'true';
+  const wanted = Math.min(Math.max(Number(req.query.count) || 20, 1), 30);
+  const now = Date.now();
+
+  if (!force && trendingCache.items.length && now - trendingCache.at < TRENDING_TTL_MS) {
+    return res.json({
+      ok: true,
+      source: 'tiktok',
+      strategy: trendingCache.strategy || null,
+      cached: true,
+      fetchedAt: new Date(trendingCache.at).toISOString(),
+      videos: trendingCache.items.slice(0, wanted),
+    });
+  }
+
+  try {
+    const { items, strategy } = await fetchTikTokTrending(30);
+    if (items.length) {
+      trendingCache = { at: now, items, strategy };
+      return res.json({
+        ok: true,
+        source: 'tiktok',
+        strategy,
+        cached: false,
+        fetchedAt: new Date(now).toISOString(),
+        videos: items.slice(0, wanted),
+      });
+    }
+    if (trendingCache.items.length) {
+      return res.json({
+        ok: true,
+        source: 'tiktok',
+        strategy: trendingCache.strategy || null,
+        cached: true,
+        stale: true,
+        fetchedAt: new Date(trendingCache.at).toISOString(),
+        videos: trendingCache.items.slice(0, wanted),
+      });
+    }
+    return res.status(502).json({
+      ok: false,
+      error: 'TikTok trend videoları alınamadı (boş yanıt). Sunucu IP’si engellenmiş olabilir; TIKTOK_USE_SESSION=true ile Playwright oturumu deneyin.',
+    });
+  } catch (e) {
+    if (trendingCache.items.length) {
+      return res.json({
+        ok: true,
+        source: 'tiktok',
+        strategy: trendingCache.strategy || null,
+        cached: true,
+        stale: true,
+        fetchedAt: new Date(trendingCache.at).toISOString(),
+        videos: trendingCache.items.slice(0, wanted),
+      });
+    }
+    return res.status(e?.status || 502).json({ ok: false, error: e?.message || 'TikTok trendleri alınamadı' });
+  }
 });
 
 app.post('/uploads/video', (req, res) => {
