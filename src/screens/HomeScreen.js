@@ -18,7 +18,7 @@ import VideoCard from '../components/VideoCard';
 import NativeAdFeedCard from '../components/NativeAdFeedCard';
 import { isNativeAdsAvailable } from '../config/ads';
 import FeedErrorBoundary from '../components/FeedErrorBoundary';
-import { fetchFeedPage, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
+import { fetchFeedPage, fetchOwnVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
 
@@ -35,6 +35,7 @@ const HomeScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [loadingTrending, setLoadingTrending] = useState(false);
   const viewabilityConfig = useRef({
     itemVisiblePercentThreshold: 80,
     minimumViewTime: 120,
@@ -47,6 +48,7 @@ const HomeScreen = () => {
   const rawFeedRef = useRef([]);
   const loadingMoreRef = useRef(false);
   const moreErrorsRef = useRef(0);
+  const loadTokenRef = useRef(0);
 
   const decorate = (items, ids, sids, fids) =>
     (items || []).map((v) => ({
@@ -57,31 +59,53 @@ const HomeScreen = () => {
     }));
 
   const load = async ({ scrollTop = false } = {}) => {
+    const token = loadTokenRef.current + 1;
+    loadTokenRef.current = token;
     setError(null);
     try {
-      const [page, ids, sids, fids] = await Promise.all([
-        fetchFeedPage({ cursor: 0, count: 12 }),
+      // Önce kendi videolar: bunlar anında gelir, trendler arka planda eklenir.
+      const [own, ids, sids, fids] = await Promise.all([
+        fetchOwnVideos(),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMyFollowingIds(user.id) : Promise.resolve(new Set()),
       ]);
+      if (token !== loadTokenRef.current) return;
       setLikedIds(ids || new Set());
       setSavedIds(sids || new Set());
       setFollowingIds(fids || new Set());
-      cursorRef.current = page?.nextCursor || 0;
+      cursorRef.current = 0;
       moreErrorsRef.current = 0;
-      rawFeedRef.current = decorate(page?.items, ids, sids, fids);
+      rawFeedRef.current = decorate(own, ids, sids, fids);
       setFeed(insertAds(rawFeedRef.current));
       if (scrollTop) {
         setCurrentIndex(0);
         try { listRef.current?.scrollToOffset?.({ offset: 0, animated: false }); } catch {}
       }
+
+      // Trendler yavaş gelebilir (sunucu Chromium açıyor); akışı bloklamadan ekle.
+      setLoadingTrending(true);
+      fetchFeedPage({ cursor: 0, count: 12, includeOwn: false, timeoutMs: 60000 })
+        .then((page) => {
+          if (token !== loadTokenRef.current) return;
+          cursorRef.current = page?.nextCursor || 0;
+          const fresh = decorate(page?.items, ids, sids, fids);
+          if (fresh.length) {
+            rawFeedRef.current = [...rawFeedRef.current, ...fresh];
+            setFeed(insertAds(rawFeedRef.current));
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (token === loadTokenRef.current) setLoadingTrending(false);
+        });
     } catch (e) {
       const code = String(e?.code || '');
       if (code.includes('permission-denied')) setError('Videolar yüklenemedi (izin). Firestore "videos" kurallarını kontrol edin.');
       else setError('Videolar yüklenemedi.');
       setFeed([]);
       rawFeedRef.current = [];
+      setLoadingTrending(false);
     } finally {
       setLoading(false);
     }
@@ -223,6 +247,11 @@ const HomeScreen = () => {
           <Ionicons name="cloud-offline-outline" size={40} color="rgba(255,255,255,0.35)" />
           <Text style={styles.msg}>{error}</Text>
           <TouchableOpacity onPress={() => load()} style={styles.retry}><Text style={styles.retryText}>Tekrar dene</Text></TouchableOpacity>
+        </View>
+      ) : feed.length === 0 && loadingTrending ? (
+        <View style={styles.center}>
+          <ActivityIndicator color="#fff" />
+          <Text style={styles.sub}>Videolar hazırlanıyor…</Text>
         </View>
       ) : feed.length === 0 ? (
         <View style={styles.center}>

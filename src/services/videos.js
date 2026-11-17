@@ -280,7 +280,7 @@ export async function fetchTrendingVideos({ cursor = 0, count = 12, refresh = fa
   };
 }
 
-async function fetchOwnVideos() {
+export async function fetchOwnVideos() {
   let own = [];
   if (isFirebaseConfigured && db) {
     try {
@@ -304,9 +304,14 @@ async function fetchOwnVideos() {
 }
 
 // Sonsuz feed: cursor 0 ilk sayfa (kendi videolar + trendler), sonrası trend sayfaları.
-export async function fetchFeedPage({ cursor = 0, count = 12, refresh = false } = {}) {
-  const own = cursor === 0 ? await fetchOwnVideos() : [];
-  const page = await fetchTrendingFeedItems({ cursor, count, refresh, timeoutMs: cursor === 0 ? 20000 : 30000 });
+export async function fetchFeedPage({ cursor = 0, count = 12, refresh = false, includeOwn = true, timeoutMs } = {}) {
+  const own = includeOwn && cursor === 0 ? await fetchOwnVideos() : [];
+  const page = await fetchTrendingFeedItems({
+    cursor,
+    count,
+    refresh,
+    timeoutMs: timeoutMs || (cursor === 0 ? 20000 : 30000),
+  });
 
   const seen = new Set(own.map((v) => String(v?.id || '')));
   const items = [...own];

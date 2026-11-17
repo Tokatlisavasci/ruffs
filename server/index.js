@@ -284,6 +284,7 @@ function withTimeout(promise, ms, label) {
 const EXPLORE_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const EXPLORE_URL = 'https://www.tiktok.com/explore';
+const FORYOU_URL = 'https://www.tiktok.com/foryou';
 
 function loadPlaywright() {
   try {
@@ -329,23 +330,12 @@ function ensureChromium(pw) {
   return chromiumInstall;
 }
 
-async function fetchTrendingFromExplore(count = 30) {
-  if (process.env.TIKTOK_EXPLORE === 'false') return [];
-  const pw = loadPlaywright();
-  if (!pw?.chromium) return [];
-
-  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 45000, 10000), 120000);
-  let browser;
-  try {
-    browser = await pw.chromium.launch({
-      headless: true,
-      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
-    });
-  } catch (e) {
-    // Eksik Chromium: indirmeyi tetikle, bu istek yedek stratejiye düşsün.
-    ensureChromium(pw);
-    throw e;
-  }
+// Tek bir sayfada (explore/foryou) item_list yanıtlarını yakalar; sabırla indirir.
+async function captureItemListPage(pw, url, target, timeoutMs) {
+  const browser = await pw.chromium.launch({
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
+  });
 
   try {
     const context = await browser.newContext({
@@ -371,39 +361,83 @@ async function fetchTrendingFromExplore(count = 30) {
             const v = normalizeTrendingVideo(item);
             if (!v.id || collected.has(v.id)) continue;
             if (!v.cover && !v.playUrl) continue;
+            if (isOfficialTikTokAuthor(v)) continue;
             collected.set(v.id, v);
           }
         })
         .catch(() => {});
     });
 
-    await page.goto(EXPLORE_URL, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+    await page.mouse.move(700, 450).catch(() => {});
 
-    const target = Math.min(Math.max(count, 12), 50);
     const deadline = Date.now() + timeoutMs;
-    let lastScrollAt = Date.now();
+    let lastScrollAt = 0;
     let lastGainAt = Date.now();
     let seenSoFar = 0;
+    // En az 12 video bulana kadar erken çıkmıyoruz; ilk istekler gecikebiliyor.
+    const minWanted = Math.min(12, target);
+
     while (Date.now() < deadline && collected.size < target) {
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(1200);
       if (collected.size > seenSoFar) {
         seenSoFar = collected.size;
         lastGainAt = Date.now();
       }
       if (collected.size >= target) break;
-      // Yeni içerik gelmiyorsa boşuna beklemeyelim.
-      if (collected.size > 0 && Date.now() - lastGainAt > 12000) break;
-      if (Date.now() - lastScrollAt > 6000) {
+      if (collected.size >= minWanted && Date.now() - lastGainAt > 18000) break;
+      if (Date.now() - lastScrollAt > 2500) {
         lastScrollAt = Date.now();
-        await page.mouse.wheel(0, 2200).catch(() => {});
+        await page.mouse.wheel(0, 2400).catch(() => {});
+        // Sayfa kendi kaydırma kabını kullanıyorsa onu da kaydır.
+        await page
+          .evaluate(() => {
+            const scrollables = [...document.querySelectorAll('div')]
+              .filter((el) => el.scrollHeight > el.clientHeight + 200)
+              .sort((a, b) => b.scrollHeight - a.scrollHeight);
+            const el = scrollables[0];
+            if (el) el.scrollTop = el.scrollTop + el.clientHeight * 0.9;
+            else window.scrollBy(0, window.innerHeight * 0.9);
+          })
+          .catch(() => {});
       }
     }
-    await page.waitForTimeout(1200); // yakalanan yanıtların parse edilmesini bekle
-    console.log(`TikTok explore: ${collected.size} video yakalandı`);
-    return [...collected.values()].slice(0, count);
+    await page.waitForTimeout(1500); // yakalanan yanıtların parse edilmesini bekle
+    return [...collected.values()].slice(0, target);
   } finally {
     await browser.close().catch(() => {});
   }
+}
+
+async function fetchTrendingFromExplore(count = 30) {
+  if (process.env.TIKTOK_EXPLORE === 'false') return [];
+  const pw = loadPlaywright();
+  if (!pw?.chromium) return [];
+
+  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 45000, 10000), 120000);
+  const target = Math.min(Math.max(count, 12), 50);
+
+  let best = [];
+  let lastError = null;
+  for (const url of [EXPLORE_URL, FORYOU_URL]) {
+    try {
+      const items = await captureItemListPage(pw, url, target, timeoutMs);
+      console.log(`TikTok ${url}: ${items.length} video yakalandı`);
+      if (items.length > best.length) best = items;
+      if (best.length >= Math.min(12, target)) break;
+    } catch (e) {
+      lastError = e;
+      console.warn(`TikTok ${url} başarısız:`, e?.message || e);
+    }
+  }
+
+  if (best.length) return best.slice(0, count);
+  if (lastError) {
+    // Eksik Chromium: indirmeyi tetikle, bu istek yedek stratejiye düşsün.
+    if (/Executable doesn't exist|browserType\.launch/i.test(String(lastError?.message || ''))) ensureChromium(pw);
+    throw lastError;
+  }
+  return [];
 }
 
 async function fetchTrendingFromPlaylists(client, limit = 4) {
