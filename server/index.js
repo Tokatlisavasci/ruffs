@@ -487,7 +487,7 @@ function addToPool(items) {
 }
 
 // Havuzu arka planda hedefe kadar büyütür; istekleri bekletmez (aynı anda tek iş).
-function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget } = {}) {
+function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget, captureTimeoutMs = POOL_CAPTURE_TIMEOUT_MS } = {}) {
   if (poolFiller) return poolFiller;
   if (trendingPool.items.length >= target) return Promise.resolve(0);
 
@@ -499,7 +499,7 @@ function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget } = {}) {
       let items = [];
       try {
         // Arka planda bekleyen istemci yok: tarayıcıya daha uzun süre tanı.
-        items = await captureNextPage(need, null, POOL_CAPTURE_TIMEOUT_MS);
+        items = await captureNextPage(need, null, captureTimeoutMs);
       } catch (e) {
         idle += 1;
         continue;
@@ -564,8 +564,12 @@ app.get('/trending', async (req, res) => {
       // Havuz boşsa beklemek zorundayız; yoksa hiç video dönmez.
       // İlk sayfayı kısa tut, kalan büyüme arka planda sürsün.
       await Promise.race([
-        ensurePoolGrowing({ maxCaptures: 1, target: Math.max(count * 2, 24) }).catch(() => 0),
-        new Promise((resolve) => setTimeout(() => resolve(-1), 40000)),
+        ensurePoolGrowing({
+          maxCaptures: 1,
+          target: Math.max(count * 2, 24),
+          captureTimeoutMs: 25000,
+        }).catch(() => 0),
+        new Promise((resolve) => setTimeout(() => resolve(-1), 32000)),
       ]);
     } else if (cursor + count > trendingPool.items.length) {
       // Havuz tükeniyor: yeni videoları bekle ama istemciyi çok bekletme.
