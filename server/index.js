@@ -421,14 +421,14 @@ async function fetchTrendingFromExplore(count = 30) {
   if (!pw?.chromium) return [];
 
   // Render'ın paylaşımlı CPU'sunda tarayıcı yavaş; toplam süreyi kısa tutuyoruz.
-  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 30000, 10000), 60000);
+  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 25000, 10000), 60000);
   const target = Math.min(Math.max(count, 12), 50);
 
   let best = [];
   let lastError = null;
   const pages = [
     [EXPLORE_URL, timeoutMs],
-    [FORYOU_URL, Math.max(12000, Math.round(timeoutMs / 2))],
+    [FORYOU_URL, Math.max(10000, Math.round(timeoutMs / 2))],
   ];
   for (const [url, pageTimeout] of pages) {
     try {

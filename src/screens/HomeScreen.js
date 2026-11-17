@@ -85,11 +85,12 @@ const HomeScreen = () => {
 
       // Trendler yavaş gelebilir (sunucu Chromium açıyor); akışı bloklamadan ekle.
       setLoadingTrending(true);
-      fetchFeedPage({ cursor: 0, count: 12, includeOwn: false, timeoutMs: 60000 })
+      fetchFeedPage({ cursor: 0, count: 12, includeOwn: false, timeoutMs: 90000 })
         .then((page) => {
           if (token !== loadTokenRef.current) return;
           cursorRef.current = page?.nextCursor || 0;
-          const fresh = decorate(page?.items, ids, sids, fids);
+          const seen = new Set(rawFeedRef.current.map((v) => v?.id));
+          const fresh = decorate(page?.items, ids, sids, fids).filter((v) => v?.id && !seen.has(v.id));
           if (fresh.length) {
             rawFeedRef.current = [...rawFeedRef.current, ...fresh];
             setFeed(insertAds(rawFeedRef.current));
