@@ -2,6 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 
+// Render'da build dizini çalışma zamanına taşınıyor, ~/.cache taşınmıyor.
+// Chromium'u node_modules içine kurarsak her deploy'da yeniden indirmek gerekmez.
+if (process.env.RENDER && !process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+}
+
 let admin = null;
 try { admin = require('firebase-admin'); } catch {}
 const REQUIRE_AUTH = process.env.REQUIRE_AUTH === 'true';
@@ -414,14 +420,19 @@ async function fetchTrendingFromExplore(count = 30) {
   const pw = loadPlaywright();
   if (!pw?.chromium) return [];
 
-  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 45000, 10000), 120000);
+  // Render'ın paylaşımlı CPU'sunda tarayıcı yavaş; toplam süreyi kısa tutuyoruz.
+  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 30000, 10000), 60000);
   const target = Math.min(Math.max(count, 12), 50);
 
   let best = [];
   let lastError = null;
-  for (const url of [EXPLORE_URL, FORYOU_URL]) {
+  const pages = [
+    [EXPLORE_URL, timeoutMs],
+    [FORYOU_URL, Math.max(12000, Math.round(timeoutMs / 2))],
+  ];
+  for (const [url, pageTimeout] of pages) {
     try {
-      const items = await captureItemListPage(pw, url, target, timeoutMs);
+      const items = await captureItemListPage(pw, url, target, pageTimeout);
       console.log(`TikTok ${url}: ${items.length} video yakalandı`);
       if (items.length > best.length) best = items;
       if (best.length >= Math.min(12, target)) break;
