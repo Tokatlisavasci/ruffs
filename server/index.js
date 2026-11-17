@@ -194,6 +194,9 @@ const POOL_CAPTURE_TIMEOUT_MS = Math.min(
   Math.max(Number(process.env.TIKTOK_POOL_CAPTURE_TIMEOUT_MS) || 45000, 15000),
   120000
 );
+// Render'ın ücretsiz CPU'sunda arka plan dolgusu istekleri yavaşlatmasın: dolgular arası bekleme.
+const POOL_FILL_COOLDOWN_MS = Math.max(Number(process.env.TIKTOK_POOL_FILL_COOLDOWN_MS) || 15000, 0);
+let poolLastFillAt = 0;
 
 async function getTikTokClient() {
   if (tiktokClient) return tiktokClient;
@@ -345,15 +348,39 @@ function ensureChromium(pw) {
   return chromiumInstall;
 }
 
-// Tek bir sayfada (explore/foryou) item_list yanıtlarını yakalar; sabırla indirir.
-async function captureItemListPage(pw, url, target, timeoutMs, locale = 'en-US') {
-  const browser = await pw.chromium.launch({
+// Her yakalamada yeni Chromium açmak Render'da CPU'yu tüketiyor: tek tarayıcıyı tekrar kullan.
+let captureBrowser = null;
+let captureBrowserIdleTimer = null;
+
+async function getCaptureBrowser(pw) {
+  if (captureBrowser?.isConnected?.()) return captureBrowser;
+  captureBrowser = await pw.chromium.launch({
     headless: true,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
   });
+  captureBrowser.on('disconnected', () => {
+    captureBrowser = null;
+  });
+  return captureBrowser;
+}
+
+function scheduleCaptureBrowserClose() {
+  if (captureBrowserIdleTimer) clearTimeout(captureBrowserIdleTimer);
+  captureBrowserIdleTimer = setTimeout(() => {
+    const browser = captureBrowser;
+    captureBrowser = null;
+    if (browser) browser.close().catch(() => {});
+  }, 5 * 60 * 1000);
+  if (captureBrowserIdleTimer.unref) captureBrowserIdleTimer.unref();
+}
+
+// Tek bir sayfada (explore/foryou) item_list yanıtlarını yakalar; sabırla indirir.
+async function captureItemListPage(pw, url, target, timeoutMs, locale = 'en-US') {
+  const browser = await getCaptureBrowser(pw);
+  let context = null;
 
   try {
-    const context = await browser.newContext({
+    context = await browser.newContext({
       userAgent: EXPLORE_UA,
       locale,
       extraHTTPHeaders: { 'Accept-Language': `${locale},en;q=0.8` },
@@ -421,7 +448,8 @@ async function captureItemListPage(pw, url, target, timeoutMs, locale = 'en-US')
     await page.waitForTimeout(1500); // yakalanan yanıtların parse edilmesini bekle
     return [...collected.values()].slice(0, target);
   } finally {
-    await browser.close().catch(() => {});
+    await context?.close().catch(() => {});
+    scheduleCaptureBrowserClose();
   }
 }
 
@@ -487,9 +515,15 @@ function addToPool(items) {
 }
 
 // Havuzu arka planda hedefe kadar büyütür; istekleri bekletmez (aynı anda tek iş).
-function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget, captureTimeoutMs = POOL_CAPTURE_TIMEOUT_MS } = {}) {
+function ensurePoolGrowing({
+  maxCaptures = 2,
+  target = poolTarget,
+  captureTimeoutMs = POOL_CAPTURE_TIMEOUT_MS,
+  minIntervalMs = POOL_FILL_COOLDOWN_MS,
+} = {}) {
   if (poolFiller) return poolFiller;
   if (trendingPool.items.length >= target) return Promise.resolve(0);
+  if (Date.now() - poolLastFillAt < minIntervalMs) return Promise.resolve(0);
 
   const task = (async () => {
     let addedTotal = 0;
@@ -515,6 +549,7 @@ function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget, captureTimeou
 
   poolFiller = task.finally(() => {
     poolFiller = null;
+    poolLastFillAt = Date.now();
   });
   return poolFiller;
 }
@@ -568,6 +603,7 @@ app.get('/trending', async (req, res) => {
           maxCaptures: 1,
           target: Math.max(count * 2, 24),
           captureTimeoutMs: 25000,
+          minIntervalMs: 0,
         }).catch(() => 0),
         new Promise((resolve) => setTimeout(() => resolve(-1), 32000)),
       ]);
