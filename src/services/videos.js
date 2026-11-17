@@ -229,23 +229,28 @@ function mapTrendingToFeedItem(v) {
   };
 }
 
-async function fetchTrendingFeedItems({ count = 24, refresh = false, timeoutMs = 15000 } = {}) {
+async function fetchTrendingFeedItems({ cursor = 0, count = 12, refresh = false, timeoutMs = 15000 } = {}) {
   try {
-    // Feed'i bekletmemek için kısa süre: sunucu önbelleği sıcaksa hemen döner,
+    // Feed'i bekletmemek için kısa süre: sunucu havuzu sıcaksa hemen döner,
     // soğuksa bu tur trendler atlanır (sonraki açılışta gelir).
-    const res = await fetchTrendingVideos({ count, refresh, timeoutMs });
-    return (res.videos || []).map(mapTrendingToFeedItem).filter((v) => v.videoUrl);
+    const res = await fetchTrendingVideos({ cursor, count, refresh, timeoutMs });
+    return {
+      items: (res.videos || []).map(mapTrendingToFeedItem).filter((v) => v.videoUrl),
+      nextCursor: Number(res.nextCursor) || 0,
+    };
   } catch {
-    return [];
+    return { items: [], nextCursor: 0 };
   }
 }
 
-export async function fetchTrendingVideos({ count = 20, refresh = false, timeoutMs = 90000 } = {}) {
+export async function fetchTrendingVideos({ cursor = 0, count = 12, refresh = false, timeoutMs = 90000 } = {}) {
   if (!API_BASE_URL) {
     throw new Error('Sunucu adresi tanımlı değil (EXPO_PUBLIC_SIGNING_API_URL).');
   }
   const url =
-    `${API_BASE_URL}/trending?count=${encodeURIComponent(String(count))}` + (refresh ? '&refresh=1' : '');
+    `${API_BASE_URL}/trending?count=${encodeURIComponent(String(count))}` +
+    `&cursor=${encodeURIComponent(String(cursor))}` +
+    (refresh ? '&refresh=1' : '');
   const controller = new AbortController();
   // Sunucu gerektiğinde Chromium açıp Keşfet yanıtı yakalıyor; ilk istek uzun sürebilir.
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -267,13 +272,15 @@ export async function fetchTrendingVideos({ count = 20, refresh = false, timeout
   }
   return {
     videos: Array.isArray(data?.videos) ? data.videos : [],
+    nextCursor: Number(data?.nextCursor) || 0,
+    hasMore: data?.hasMore !== false,
     source: data?.source || null,
     fetchedAt: data?.fetchedAt || null,
     stale: !!data?.stale,
   };
 }
 
-export async function fetchFeedVideos() {
+async function fetchOwnVideos() {
   let own = [];
   if (isFirebaseConfigured && db) {
     try {
@@ -293,18 +300,32 @@ export async function fetchFeedVideos() {
       } catch { own = []; }
     }
   }
-  // TikTok trend videoları kendi içeriklerden sonra normal akışa eklenir.
-  const trending = await fetchTrendingFeedItems({ count: 24 });
-  if (!trending.length) return own;
+  return own;
+}
+
+// Sonsuz feed: cursor 0 ilk sayfa (kendi videolar + trendler), sonrası trend sayfaları.
+export async function fetchFeedPage({ cursor = 0, count = 12, refresh = false } = {}) {
+  const own = cursor === 0 ? await fetchOwnVideos() : [];
+  const page = await fetchTrendingFeedItems({ cursor, count, refresh, timeoutMs: cursor === 0 ? 20000 : 30000 });
 
   const seen = new Set(own.map((v) => String(v?.id || '')));
-  const merged = [...own];
-  for (const v of trending) {
+  const items = [...own];
+  for (const v of page.items) {
     if (!v?.id || seen.has(v.id)) continue;
     seen.add(v.id);
-    merged.push(v);
+    items.push(v);
   }
-  return merged;
+
+  return { items, nextCursor: page.nextCursor > cursor ? page.nextCursor : cursor + count };
+}
+
+export async function fetchFeedVideos() {
+  try {
+    const page = await fetchFeedPage({ cursor: 0, count: 12 });
+    return page.items;
+  } catch {
+    return fetchOwnVideos();
+  }
 }
 
 

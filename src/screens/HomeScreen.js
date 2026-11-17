@@ -18,7 +18,7 @@ import VideoCard from '../components/VideoCard';
 import NativeAdFeedCard from '../components/NativeAdFeedCard';
 import { isNativeAdsAvailable } from '../config/ads';
 import FeedErrorBoundary from '../components/FeedErrorBoundary';
-import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
+import { fetchFeedPage, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
 const { height } = Dimensions.get('window');
 
@@ -42,12 +42,25 @@ const HomeScreen = () => {
   const listRef = useRef(null);
   const appState = useRef(AppState.currentState);
   const lastRefreshAt = useRef(0);
+  // Sonsuz akış durumu
+  const cursorRef = useRef(0);
+  const rawFeedRef = useRef([]);
+  const loadingMoreRef = useRef(false);
+  const moreErrorsRef = useRef(0);
+
+  const decorate = (items, ids, sids, fids) =>
+    (items || []).map((v) => ({
+      ...v,
+      isLiked: ids?.has?.(v.id),
+      isBookmarked: sids?.has?.(v.id),
+      isFollowing: fids?.has?.(v.uid || v.userId),
+    }));
 
   const load = async ({ scrollTop = false } = {}) => {
     setError(null);
     try {
-      const [items, ids, sids, fids] = await Promise.all([
-        fetchFeedVideos(),
+      const [page, ids, sids, fids] = await Promise.all([
+        fetchFeedPage({ cursor: 0, count: 12 }),
         user?.id ? fetchMyLikedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMySavedIds(user.id) : Promise.resolve(new Set()),
         user?.id ? fetchMyFollowingIds(user.id) : Promise.resolve(new Set()),
@@ -55,8 +68,10 @@ const HomeScreen = () => {
       setLikedIds(ids || new Set());
       setSavedIds(sids || new Set());
       setFollowingIds(fids || new Set());
-      const merged = (items || []).map((v) => ({ ...v, isLiked: ids?.has?.(v.id), isBookmarked: sids?.has?.(v.id), isFollowing: fids?.has?.(v.uid || v.userId) }));
-      setFeed(insertAds(merged));
+      cursorRef.current = page?.nextCursor || 0;
+      moreErrorsRef.current = 0;
+      rawFeedRef.current = decorate(page?.items, ids, sids, fids);
+      setFeed(insertAds(rawFeedRef.current));
       if (scrollTop) {
         setCurrentIndex(0);
         try { listRef.current?.scrollToOffset?.({ offset: 0, animated: false }); } catch {}
@@ -66,10 +81,33 @@ const HomeScreen = () => {
       if (code.includes('permission-denied')) setError('Videolar yüklenemedi (izin). Firestore "videos" kurallarını kontrol edin.');
       else setError('Videolar yüklenemedi.');
       setFeed([]);
+      rawFeedRef.current = [];
     } finally {
       setLoading(false);
     }
   };
+
+  // Akışın sonuna yaklaşınca bir sonraki sayfa eklenir; sunucu havuzu tükendiğinde başa döner.
+  const loadMore = useCallback(async () => {
+    if (loadingMoreRef.current || moreErrorsRef.current >= 3) return;
+    loadingMoreRef.current = true;
+    try {
+      const page = await fetchFeedPage({ cursor: cursorRef.current, count: 8 });
+      cursorRef.current = page?.nextCursor || cursorRef.current;
+      const fresh = decorate(page?.items, likedIds, savedIds, followingIds);
+      if (fresh.length) {
+        rawFeedRef.current = [...rawFeedRef.current, ...fresh];
+        setFeed(insertAds(rawFeedRef.current));
+        moreErrorsRef.current = 0;
+      } else {
+        moreErrorsRef.current += 1;
+      }
+    } catch {
+      moreErrorsRef.current += 1;
+    } finally {
+      loadingMoreRef.current = false;
+    }
+  }, [likedIds, savedIds, followingIds]);
 
   useEffect(() => { load(); }, [user?.id]);
 
@@ -197,7 +235,7 @@ const HomeScreen = () => {
           ref={listRef}
           data={feed}
           renderItem={renderItem}
-          keyExtractor={(item, i) => item.id || String(i)}
+          keyExtractor={(item, i) => `${item?.id || 'item'}-${i}`}
           pagingEnabled
           showsVerticalScrollIndicator={false}
           decelerationRate="fast"
@@ -211,6 +249,8 @@ const HomeScreen = () => {
           onViewableItemsChanged={onViewableItemsChanged}
           viewabilityConfig={viewabilityConfig}
           getItemLayout={(_, index) => ({ length: height, offset: height * index, index })}
+          onEndReached={loadMore}
+          onEndReachedThreshold={2.5}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />}
         />
       )}
