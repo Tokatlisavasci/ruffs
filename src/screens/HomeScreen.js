@@ -51,6 +51,7 @@ const HomeScreen = () => {
   // Akışta gösterilmiş video id'leri: aynı video tekrar eklenmesin.
   const shownIdsRef = useRef(new Set());
   const moreCooldownRef = useRef(0);
+  const emptyRoundsRef = useRef(0);
 
   const decorate = (items, ids, sids, fids) =>
     (items || []).map((v) => ({
@@ -121,14 +122,14 @@ const HomeScreen = () => {
     if (loadingMoreRef.current || Date.now() < moreCooldownRef.current) return;
     loadingMoreRef.current = true;
     let found = false;
+    let lastPage = [];
     try {
       for (let attempt = 0; attempt < 3 && !found; attempt++) {
         const page = await fetchFeedPage({ cursor: cursorRef.current, count: 10, includeOwn: false });
         if (!page?.items?.length) break;
         cursorRef.current = page.nextCursor ?? cursorRef.current;
-        const fresh = decorate(page.items, likedIds, savedIds, followingIds).filter(
-          (v) => v?.id && !shownIdsRef.current.has(v.id)
-        );
+        lastPage = decorate(page.items, likedIds, savedIds, followingIds);
+        const fresh = lastPage.filter((v) => v?.id && !shownIdsRef.current.has(v.id));
         if (fresh.length) {
           fresh.forEach((v) => shownIdsRef.current.add(v.id));
           rawFeedRef.current = [...rawFeedRef.current, ...fresh];
@@ -136,8 +137,17 @@ const HomeScreen = () => {
           found = true;
         }
       }
-      if (!found) {
-        // Havuzdaki videolar zaten gösterildi; sunucu arka planda büyütüyor, biraz sonra tekrar dene.
+      if (found) {
+        emptyRoundsRef.current = 0;
+      } else if (emptyRoundsRef.current + 1 >= 3 && lastPage.length) {
+        // Havuzdaki tüm benzersiz videolar gösterildi; akışı durdurmamak için
+        // başa dön (sunucu rastgele bir noktadan devam eder, aynı sıra tekrarlanmaz).
+        emptyRoundsRef.current = 0;
+        rawFeedRef.current = [...rawFeedRef.current, ...lastPage];
+        setFeed(insertAds(rawFeedRef.current));
+      } else {
+        // Sunucu havuzu arka planda büyütüyor; biraz sonra yeniden dene.
+        emptyRoundsRef.current += 1;
         moreCooldownRef.current = Date.now() + 12000;
       }
     } catch {

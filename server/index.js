@@ -189,6 +189,11 @@ let poolFiller = null;
 // Havuz hedefi: istemci sona gelip yeni video bulamazsa hedef büyütülür.
 let poolTarget = TRENDING_POOL_TARGET;
 let poolStarveUntil = 0;
+// Arka plan dolgusu istek bekletmediği için yakalamaya daha uzun süre tanınır.
+const POOL_CAPTURE_TIMEOUT_MS = Math.min(
+  Math.max(Number(process.env.TIKTOK_POOL_CAPTURE_TIMEOUT_MS) || 45000, 15000),
+  120000
+);
 
 async function getTikTokClient() {
   if (tiktokClient) return tiktokClient;
@@ -430,12 +435,15 @@ const CAPTURE_SOURCES = [
 let captureSourceIdx = 0;
 
 // Sıradaki kaynaktan bir sayfa yakalar; boş dönerse bir sonraki kaynağı dener.
-async function captureNextPage(target, diag = null) {
+async function captureNextPage(target, diag = null, timeoutOverrideMs = 0) {
   if (process.env.TIKTOK_EXPLORE === 'false') return [];
   const pw = loadPlaywright();
   if (!pw?.chromium) return [];
 
-  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 30000, 10000), 90000);
+  const timeoutMs = Math.min(
+    Math.max(Number(timeoutOverrideMs) || Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 30000, 10000),
+    120000
+  );
   let lastError = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -490,13 +498,16 @@ function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget } = {}) {
       const need = Math.min(120, Math.max(target - trendingPool.items.length, 24));
       let items = [];
       try {
-        items = await captureNextPage(need);
+        // Arka planda bekleyen istemci yok: tarayıcıya daha uzun süre tanı.
+        items = await captureNextPage(need, null, POOL_CAPTURE_TIMEOUT_MS);
       } catch (e) {
         idle += 1;
         continue;
       }
       const added = addToPool(items);
       addedTotal += added;
+      trendingPool.lastCapture = { at: Date.now(), captured: items.length, added, pool: trendingPool.items.length };
+      console.log(`Trend havuzu: ${items.length} yakalandı, ${added} yeni (toplam ${trendingPool.items.length})`);
       idle = added ? 0 : idle + 1;
     }
     return addedTotal;
@@ -552,7 +563,10 @@ app.get('/trending', async (req, res) => {
     if (!trendingPool.items.length) {
       // Havuz boşsa beklemek zorundayız; yoksa hiç video dönmez.
       // İlk sayfayı kısa tut, kalan büyüme arka planda sürsün.
-      await ensurePoolGrowing({ maxCaptures: 1, target: Math.max(count * 2, 24) });
+      await Promise.race([
+        ensurePoolGrowing({ maxCaptures: 1, target: Math.max(count * 2, 24) }).catch(() => 0),
+        new Promise((resolve) => setTimeout(() => resolve(-1), 40000)),
+      ]);
     } else if (cursor + count > trendingPool.items.length) {
       // Havuz tükeniyor: yeni videoları bekle ama istemciyi çok bekletme.
       // Büyütme arka planda sürer, sonraki istekler aynı işe bağlanır.
@@ -598,6 +612,7 @@ app.get('/trending', async (req, res) => {
   }
   const slice = items.slice(start, start + count);
   if (diag) diag.pool = items.length;
+  if (diag) diag.lastCapture = trendingPool.lastCapture || null;
 
   return res.json({
     ok: true,
