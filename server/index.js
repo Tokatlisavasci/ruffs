@@ -383,7 +383,11 @@ async function fetchTrendingFromPlaylists(client, limit = 4) {
   return items;
 }
 
-async function fetchTikTokTrending(count = 20) {
+async function fetchTikTokTrending(count = 20, diag = null) {
+  const note = (key, value) => {
+    if (diag) diag[key] = value;
+  };
+
   // 1) SDK'nın kendi recommend çağrısı
   let client = null;
   try {
@@ -391,27 +395,36 @@ async function fetchTikTokTrending(count = 20) {
     const result = await withTimeout(client.getTrendingVideos(count), 25000, 'TikTok recommend');
     const list = Array.isArray(result?.videos) ? result.videos : [];
     const normalized = list.map(normalizeTrendingVideo).filter((v) => v.id && (v.cover || v.playUrl));
+    note('recommend', `${normalized.length} video`);
     if (normalized.length) return { items: normalized, source: 'recommend' };
   } catch (e) {
+    note('recommend', `hata: ${e?.message || e}`);
     console.warn('TikTok recommend hatası, explore yedeğine geçiliyor:', e?.message || e);
   }
 
   // 2) Başsız Chromium ile gerçek Keşfet yanıtları
   try {
     const explore = await fetchTrendingFromExplore(Math.max(count, 24));
+    note('explore', `${explore.length} video`);
     if (explore.length) return { items: explore, source: 'explore' };
   } catch (e) {
+    note('explore', `hata: ${e?.message || e}`);
     console.warn('TikTok explore hatası, çalma listesi yedeğine geçiliyor:', e?.message || e);
   }
 
   // 3) Son çare: TikTok'un küratörlü çalma listeleri (SDK)
-  if (process.env.TIKTOK_PLAYLIST_FALLBACK === 'false' || !client) return { items: [], source: 'none' };
+  if (process.env.TIKTOK_PLAYLIST_FALLBACK === 'false' || !client) {
+    note('playlists', 'atlandı');
+    return { items: [], source: 'none' };
+  }
 
   try {
     const playlistLimit = Math.min(Math.max(Number(process.env.TIKTOK_PLAYLIST_LIMIT) || 4, 1), 5);
     const fallback = await fetchTrendingFromPlaylists(client, playlistLimit);
+    note('playlists', `${fallback.length} video`);
     return { items: fallback, source: fallback.length ? 'playlists' : 'none' };
   } catch (e) {
+    note('playlists', `hata: ${e?.message || e}`);
     console.warn('TikTok çalma listesi yedeği başarısız:', e?.message || e);
     return { items: [], source: 'none' };
   }
@@ -444,7 +457,8 @@ app.get('/trending', async (req, res) => {
   }
 
   try {
-    const { items, source } = await fetchTikTokTrending(30);
+    const diag = req.query.debug === '1' ? {} : null;
+    const { items, source } = await fetchTikTokTrending(30, diag);
     if (items.length) {
       trendingCache = { at: now, items, source };
       return res.json({
@@ -453,6 +467,7 @@ app.get('/trending', async (req, res) => {
         cached: false,
         fetchedAt: new Date(now).toISOString(),
         videos: items.slice(0, wanted),
+        ...(diag ? { debug: diag } : {}),
       });
     }
     if (trendingCache.items.length) {
