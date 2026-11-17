@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js"
+    "dev": "node index.js",
+    "postinstall": "playwright install chromium || echo \"playwright chromium kurulumu atlandı\""
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1164.0",
@@ -19,6 +20,7 @@
     "firebase-admin": "^12.7.0",
     "form-data": "^4.0.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^1.4.5-lts.2"
+    "multer": "^1.4.5-lts.2",
+    "playwright": "^1.65.1"
   }
 }

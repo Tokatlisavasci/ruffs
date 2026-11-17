@@ -231,7 +231,8 @@ function pickTrendingPlayUrl(raw) {
 }
 
 function normalizeTrendingVideo(item) {
-  const raw = item?.raw || {};
+  // SDK sarmalayıcısı (raw) ya da ham itemList öğesi (explore) gelebilir.
+  const raw = item?.raw || item || {};
   const author = raw?.author || {};
   const uniqueId = String(author.uniqueId || '').replace(/^@/, '');
   const id = String(item?.id || '');
@@ -240,7 +241,7 @@ function normalizeTrendingVideo(item) {
     id,
     desc: String(item?.desc || ''),
     createTime: item?.createTime || null,
-    duration: Number(item?.duration) || 0,
+    duration: Number(item?.duration ?? raw?.video?.duration ?? 0) || 0,
     stats: {
       views: Number(item?.playCount ?? raw?.stats?.playCount ?? 0),
       likes: Number(item?.diggCount ?? raw?.stats?.diggCount ?? 0),
@@ -260,9 +261,6 @@ function normalizeTrendingVideo(item) {
   };
 }
 
-// TikTok /api/recommend/item_list imzalı istek istediği için bazı günlerde boş dönebiliyor.
-// O durumda TikTok'un kendi resmi (küratörlü) çalma listelerinden trend benzeri içerik toplar.
-// TIKTOK_PLAYLIST_FALLBACK=false ile kapatılabilir.
 function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -270,6 +268,92 @@ function withTimeout(promise, ms, label) {
     if (timer.unref) timer.unref();
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// --- Başsız Chromium ile gerçek Keşfet (tiktok.com/explore) yanıtları ---
+// SDK'nın recommend çağrısı imzalı istek istediği için boş dönebiliyor; o durumda
+// explore sayfası tarayıcıda açılır ve ağdan /api/explore/item_list yanıtları yakalanır.
+const EXPLORE_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const EXPLORE_URL = 'https://www.tiktok.com/explore';
+
+function loadPlaywright() {
+  try {
+    return require('playwright');
+  } catch (e) {
+    console.warn('playwright yüklü değil (explore stratejisi atlanıyor):', e?.message || e);
+    return null;
+  }
+}
+
+async function fetchTrendingFromExplore(count = 30) {
+  if (process.env.TIKTOK_EXPLORE === 'false') return [];
+  const pw = loadPlaywright();
+  if (!pw?.chromium) return [];
+
+  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 45000, 10000), 120000);
+  const browser = await pw.chromium.launch({
+    headless: true,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
+  });
+
+  try {
+    const context = await browser.newContext({
+      userAgent: EXPLORE_UA,
+      locale: 'en-US',
+      viewport: { width: 1400, height: 900 },
+    });
+    const page = await context.newPage();
+    // Görsel/font/medya indirmeleri gereksiz; JSON yanıtları yakalamak yeterli.
+    await page.route('**/*', (route) => {
+      const type = route.request().resourceType();
+      if (type === 'image' || type === 'font' || type === 'media') return route.abort();
+      return route.continue();
+    });
+
+    const collected = new Map();
+    page.on('response', (response) => {
+      if (!/\/api\/(explore|recommend)\/item_list\//.test(response.url())) return;
+      response
+        .json()
+        .then((data) => {
+          for (const item of data?.itemList || []) {
+            const v = normalizeTrendingVideo(item);
+            if (!v.id || collected.has(v.id)) continue;
+            if (!v.cover && !v.playUrl) continue;
+            collected.set(v.id, v);
+          }
+        })
+        .catch(() => {});
+    });
+
+    await page.goto(EXPLORE_URL, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+
+    const target = Math.min(Math.max(count, 12), 28);
+    const deadline = Date.now() + timeoutMs;
+    let lastScrollAt = Date.now();
+    let lastGainAt = Date.now();
+    let seenSoFar = 0;
+    while (Date.now() < deadline && collected.size < target) {
+      await page.waitForTimeout(1500);
+      if (collected.size > seenSoFar) {
+        seenSoFar = collected.size;
+        lastGainAt = Date.now();
+      }
+      if (collected.size >= target) break;
+      // Yeni içerik gelmiyorsa boşuna beklemeyelim.
+      if (collected.size > 0 && Date.now() - lastGainAt > 12000) break;
+      if (Date.now() - lastScrollAt > 6000) {
+        lastScrollAt = Date.now();
+        await page.mouse.wheel(0, 2200).catch(() => {});
+      }
+    }
+    await page.waitForTimeout(1200); // yakalanan yanıtların parse edilmesini bekle
+    console.log(`TikTok explore: ${collected.size} video yakalandı`);
+    return [...collected.values()].slice(0, count);
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }
 
 async function fetchTrendingFromPlaylists(client, limit = 4) {
@@ -300,21 +384,37 @@ async function fetchTrendingFromPlaylists(client, limit = 4) {
 }
 
 async function fetchTikTokTrending(count = 20) {
-  const client = await getTikTokClient();
+  // 1) SDK'nın kendi recommend çağrısı
+  let client = null;
   try {
+    client = await getTikTokClient();
     const result = await withTimeout(client.getTrendingVideos(count), 25000, 'TikTok recommend');
     const list = Array.isArray(result?.videos) ? result.videos : [];
     const normalized = list.map(normalizeTrendingVideo).filter((v) => v.id && (v.cover || v.playUrl));
-    if (normalized.length) return { items: normalized, strategy: 'recommend' };
+    if (normalized.length) return { items: normalized, source: 'recommend' };
   } catch (e) {
-    console.warn('TikTok recommend hatası, çalma listesi yedeğine geçiliyor:', e?.message || e);
+    console.warn('TikTok recommend hatası, explore yedeğine geçiliyor:', e?.message || e);
   }
 
-  if (process.env.TIKTOK_PLAYLIST_FALLBACK === 'false') return { items: [], strategy: 'recommend' };
+  // 2) Başsız Chromium ile gerçek Keşfet yanıtları
+  try {
+    const explore = await fetchTrendingFromExplore(Math.max(count, 24));
+    if (explore.length) return { items: explore, source: 'explore' };
+  } catch (e) {
+    console.warn('TikTok explore hatası, çalma listesi yedeğine geçiliyor:', e?.message || e);
+  }
 
-  const playlistLimit = Math.min(Math.max(Number(process.env.TIKTOK_PLAYLIST_LIMIT) || 4, 1), 5);
-  const fallback = await fetchTrendingFromPlaylists(client, playlistLimit);
-  return { items: fallback, strategy: fallback.length ? 'playlists' : 'recommend' };
+  // 3) Son çare: TikTok'un küratörlü çalma listeleri (SDK)
+  if (process.env.TIKTOK_PLAYLIST_FALLBACK === 'false' || !client) return { items: [], source: 'none' };
+
+  try {
+    const playlistLimit = Math.min(Math.max(Number(process.env.TIKTOK_PLAYLIST_LIMIT) || 4, 1), 5);
+    const fallback = await fetchTrendingFromPlaylists(client, playlistLimit);
+    return { items: fallback, source: fallback.length ? 'playlists' : 'none' };
+  } catch (e) {
+    console.warn('TikTok çalma listesi yedeği başarısız:', e?.message || e);
+    return { items: [], source: 'none' };
+  }
 }
 
 const app = express();
@@ -336,8 +436,7 @@ app.get('/trending', async (req, res) => {
   if (!force && trendingCache.items.length && now - trendingCache.at < TRENDING_TTL_MS) {
     return res.json({
       ok: true,
-      source: 'tiktok',
-      strategy: trendingCache.strategy || null,
+      source: trendingCache.source || 'cache',
       cached: true,
       fetchedAt: new Date(trendingCache.at).toISOString(),
       videos: trendingCache.items.slice(0, wanted),
@@ -345,13 +444,12 @@ app.get('/trending', async (req, res) => {
   }
 
   try {
-    const { items, strategy } = await fetchTikTokTrending(30);
+    const { items, source } = await fetchTikTokTrending(30);
     if (items.length) {
-      trendingCache = { at: now, items, strategy };
+      trendingCache = { at: now, items, source };
       return res.json({
         ok: true,
-        source: 'tiktok',
-        strategy,
+        source,
         cached: false,
         fetchedAt: new Date(now).toISOString(),
         videos: items.slice(0, wanted),
@@ -360,8 +458,7 @@ app.get('/trending', async (req, res) => {
     if (trendingCache.items.length) {
       return res.json({
         ok: true,
-        source: 'tiktok',
-        strategy: trendingCache.strategy || null,
+        source: trendingCache.source || 'cache',
         cached: true,
         stale: true,
         fetchedAt: new Date(trendingCache.at).toISOString(),
@@ -370,14 +467,13 @@ app.get('/trending', async (req, res) => {
     }
     return res.status(502).json({
       ok: false,
-      error: 'TikTok trend videoları alınamadı (boş yanıt). Sunucu IP’si engellenmiş olabilir; TIKTOK_USE_SESSION=true ile Playwright oturumu deneyin.',
+      error: 'TikTok trend videoları alınamadı (recommend, explore ve çalma listesi yolları boş döndü).',
     });
   } catch (e) {
     if (trendingCache.items.length) {
       return res.json({
         ok: true,
-        source: 'tiktok',
-        strategy: trendingCache.strategy || null,
+        source: trendingCache.source || 'cache',
         cached: true,
         stale: true,
         fetchedAt: new Date(trendingCache.at).toISOString(),
