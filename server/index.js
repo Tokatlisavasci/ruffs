@@ -302,7 +302,7 @@ function loadPlaywright() {
 }
 
 // Deploy sırasında Chromium inmemiş olabilir (build script'i çalışmadı/kısıldı).
-// Bu durumda arka planda bir kez indirmeyi dener; o istek playlists'e düşer,
+// Bu durumda arka planda bir kez indirmeyi dener; o istek boş döner,
 // indirme bitince sonraki istekler explore kullanır.
 let chromiumInstall = null;
 let chromiumInstallState = 'bilinmiyor';
@@ -451,34 +451,6 @@ async function fetchTrendingFromExplore(count = 30) {
   return [];
 }
 
-async function fetchTrendingFromPlaylists(client, limit = 4) {
-  const playlists = await withTimeout(client.getUserPlaylists('tiktok'), 20000, 'playlist listesi');
-  const list = Array.isArray(playlists?.playlists) ? playlists.playlists : [];
-  const usable = list.filter((p) => p?.id && Number(p?.videoCount) > 0).slice(0, limit);
-  if (!usable.length) return [];
-
-  const seen = new Set();
-  const items = [];
-  // SDK'nın iç kuyruğu paralel isteklerde kilitleniyor; sırayla çekiyoruz.
-  for (const p of usable) {
-    try {
-      const res = await withTimeout(client.getPlaylistVideos(p.id, 0, 30), 25000, `çalma listesi ${p.id}`);
-      for (const raw of res?.videos || []) {
-        const v = normalizeTrendingVideo(raw);
-        if (!v.id || seen.has(v.id)) continue;
-        if (!v.cover && !v.playUrl) continue;
-        if (isOfficialTikTokAuthor(v)) continue;
-        seen.add(v.id);
-        items.push(v);
-      }
-    } catch (e) {
-      console.warn('TikTok çalma listesi atlandı:', p?.id, e?.message || e);
-    }
-  }
-  items.sort((a, b) => (b?.stats?.views || 0) - (a?.stats?.views || 0));
-  return items;
-}
-
 async function fetchRecommendItems(count = 24) {
   const client = await getTikTokClient();
   const result = await withTimeout(client.getTrendingVideos(count), 20000, 'TikTok recommend');
@@ -486,7 +458,7 @@ async function fetchRecommendItems(count = 24) {
   return list.map(normalizeTrendingVideo).filter((v) => v.id && (v.cover || v.playUrl));
 }
 
-// Havuzu hedef sayıya çıkarır: önce Keşfet, yetmezse çalma listeleri.
+// Havuzu hedef sayıya çıkarır: SDK recommend (çoğu zaman boş) → Keşfet → /foryou.
 // Aynı anda tek büyütme çalışır; video yoksa false döner.
 async function growTrendingPool(targetItems, diag = null) {
   if (trendingPool.growing) return trendingPool.growing;
@@ -528,17 +500,7 @@ async function growTrendingPool(targetItems, diag = null) {
       console.warn('TikTok explore hatası:', e?.message || e);
     }
 
-    // 3) Son çare: TikTok'un küratörlü çalma listeleri (SDK)
-    if (trendingPool.items.length < targetItems) {
-      try {
-        const client = await getTikTokClient();
-        const playlists = await fetchTrendingFromPlaylists(client, 3);
-        if (diag) diag.playlists = `${playlists.length} video`;
-        add(playlists, 'playlists');
-      } catch (e) {
-        if (diag) diag.playlists = `hata: ${e?.message || e}`;
-      }
-    }
+    // Çalma listesi yedeği kaldırıldı: içeriğin tamamı @tiktok hesabından ve ~40 sn sürüyor.
 
     trendingPool.updatedAt = Date.now();
     if (diag) diag.pool = trendingPool.items.length;
@@ -614,7 +576,7 @@ app.get('/trending', async (req, res) => {
   if (!items.length) {
     return res.status(502).json({
       ok: false,
-      error: 'TikTok trend videoları alınamadı (recommend, explore ve çalma listesi yolları boş döndü).',
+      error: 'TikTok trend videoları alınamadı (Keşfet yakalanamadı; Chromium hazır mı?).',
     });
   }
 
