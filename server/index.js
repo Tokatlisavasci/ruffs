@@ -286,16 +286,58 @@ function loadPlaywright() {
   }
 }
 
+// Deploy sırasında Chromium inmemiş olabilir (build script'i çalışmadı/kısıldı).
+// Bu durumda arka planda bir kez indirmeyi dener; o istek playlists'e düşer,
+// indirme bitince sonraki istekler explore kullanır.
+let chromiumInstall = null;
+let chromiumInstallState = 'bilinmiyor';
+
+function ensureChromium(pw) {
+  if (process.env.TIKTOK_EXPLORE_AUTOINSTALL === 'false') return null;
+  try {
+    const execPath = pw.chromium.executablePath();
+    if (execPath && require('fs').existsSync(execPath)) return null;
+  } catch {
+    return null;
+  }
+  if (chromiumInstall) return chromiumInstall;
+
+  chromiumInstallState = 'indiriliyor';
+  console.log('Chromium bulunamadı, `playwright install chromium` başlatılıyor');
+  chromiumInstall = new Promise((resolve) => {
+    const { spawn } = require('child_process');
+    const child = spawn('npx', ['playwright', 'install', 'chromium'], { stdio: 'inherit', shell: process.platform === 'win32' });
+    const done = (ok) => {
+      chromiumInstallState = ok ? 'hazır' : 'başarısız';
+      console.log('playwright install chromium:', chromiumInstallState);
+      resolve(ok);
+    };
+    child.on('exit', (code) => done(code === 0));
+    child.on('error', (e) => {
+      console.warn('playwright install başlatılamadı:', e?.message || e);
+      done(false);
+    });
+  });
+  return chromiumInstall;
+}
+
 async function fetchTrendingFromExplore(count = 30) {
   if (process.env.TIKTOK_EXPLORE === 'false') return [];
   const pw = loadPlaywright();
   if (!pw?.chromium) return [];
 
   const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 45000, 10000), 120000);
-  const browser = await pw.chromium.launch({
-    headless: true,
-    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
-  });
+  let browser;
+  try {
+    browser = await pw.chromium.launch({
+      headless: true,
+      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
+    });
+  } catch (e) {
+    // Eksik Chromium: indirmeyi tetikle, bu istek yedek stratejiye düşsün.
+    ensureChromium(pw);
+    throw e;
+  }
 
   try {
     const context = await browser.newContext({
@@ -457,7 +499,7 @@ app.get('/trending', async (req, res) => {
   }
 
   try {
-    const diag = req.query.debug === '1' ? {} : null;
+    const diag = req.query.debug === '1' ? { chromium: chromiumInstallState } : null;
     const { items, source } = await fetchTikTokTrending(30, diag);
     if (items.length) {
       trendingCache = { at: now, items, source };

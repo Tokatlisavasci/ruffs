@@ -210,17 +210,30 @@ export async function fetchTrendingVideos({ count = 20, refresh = false } = {}) 
   if (!API_BASE_URL) {
     throw new Error('Sunucu adresi tanımlı değil (EXPO_PUBLIC_SIGNING_API_URL).');
   }
-  const params = new URLSearchParams({ count: String(count) });
-  if (refresh) params.set('refresh', '1');
-  const res = await fetch(`${API_BASE_URL}/trending?${params.toString()}`, {
-    headers: { Accept: 'application/json' },
-  });
-  const data = await res.json().catch(() => ({}));
+  const url =
+    `${API_BASE_URL}/trending?count=${encodeURIComponent(String(count))}` + (refresh ? '&refresh=1' : '');
+  const controller = new AbortController();
+  // Sunucu gerektiğinde Chromium açıp Keşfet yanıtı yakalıyor; ilk istek uzun sürebilir.
+  const timer = setTimeout(() => controller.abort(), 90000);
+  let res;
+  let data = {};
+  try {
+    res = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    if (e?.name === 'AbortError') {
+      throw new Error('Trendler zaman aşımına uğradı. Birkaç saniye sonra tekrar dene.');
+    }
+    throw new Error('Trend sunucusuna ulaşılamadı. İnternet bağlantısını kontrol et.');
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok || data?.ok === false) {
     throw Object.assign(new Error(data?.error || `Trendler alınamadı (HTTP ${res.status})`), { status: res.status });
   }
   return {
     videos: Array.isArray(data?.videos) ? data.videos : [],
+    source: data?.source || null,
     fetchedAt: data?.fetchedAt || null,
     stale: !!data?.stale,
   };

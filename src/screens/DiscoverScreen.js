@@ -124,6 +124,7 @@ const DiscoverScreen = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
+  const [source, setSource] = useState(null);
   const [selected, setSelected] = useState(null);
   const lastLoadedAt = useRef(0);
 
@@ -132,6 +133,7 @@ const DiscoverScreen = () => {
     try {
       const res = await fetchTrendingVideos({ count: 24, refresh });
       setItems(res.videos || []);
+      setSource(res.source || null);
       lastLoadedAt.current = Date.now();
       if (!res.videos?.length) setError('TikTok trend videoları boş döndü.');
     } catch (e) {
@@ -177,7 +179,11 @@ const DiscoverScreen = () => {
           )}
         </TouchableOpacity>
       </View>
-      <Text style={styles.headerSub}>Otomatik olarak güncellenir · kaynak: TikTok</Text>
+      <Text style={styles.headerSub}>
+        {items.length
+          ? `${items.length} video · kaynak: ${source || 'tiktok'}${error ? ' · son hata: ' + error : ''}`
+          : 'Otomatik olarak güncellenir · kaynak: TikTok'}
+      </Text>
 
       {loading ? (
         <View style={styles.center}>
