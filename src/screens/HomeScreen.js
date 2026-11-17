@@ -47,8 +47,10 @@ const HomeScreen = () => {
   const cursorRef = useRef(0);
   const rawFeedRef = useRef([]);
   const loadingMoreRef = useRef(false);
-  const moreErrorsRef = useRef(0);
   const loadTokenRef = useRef(0);
+  // Akışta gösterilmiş video id'leri: aynı video tekrar eklenmesin.
+  const shownIdsRef = useRef(new Set());
+  const moreCooldownRef = useRef(0);
 
   const decorate = (items, ids, sids, fids) =>
     (items || []).map((v) => ({
@@ -75,8 +77,8 @@ const HomeScreen = () => {
       setSavedIds(sids || new Set());
       setFollowingIds(fids || new Set());
       cursorRef.current = 0;
-      moreErrorsRef.current = 0;
       rawFeedRef.current = decorate(own, ids, sids, fids);
+      shownIdsRef.current = new Set(rawFeedRef.current.map((v) => v?.id).filter(Boolean));
       setFeed(insertAds(rawFeedRef.current));
       if (scrollTop) {
         setCurrentIndex(0);
@@ -89,9 +91,11 @@ const HomeScreen = () => {
         .then((page) => {
           if (token !== loadTokenRef.current) return;
           cursorRef.current = page?.nextCursor || 0;
-          const seen = new Set(rawFeedRef.current.map((v) => v?.id));
-          const fresh = decorate(page?.items, ids, sids, fids).filter((v) => v?.id && !seen.has(v.id));
+          const fresh = decorate(page?.items, ids, sids, fids).filter(
+            (v) => v?.id && !shownIdsRef.current.has(v.id)
+          );
           if (fresh.length) {
+            fresh.forEach((v) => shownIdsRef.current.add(v.id));
             rawFeedRef.current = [...rawFeedRef.current, ...fresh];
             setFeed(insertAds(rawFeedRef.current));
           }
@@ -112,23 +116,32 @@ const HomeScreen = () => {
     }
   };
 
-  // Akışın sonuna yaklaşınca bir sonraki sayfa eklenir; sunucu havuzu tükendiğinde başa döner.
+  // Akışın sonuna yaklaşınca yeni videolar eklenir; gösterilmiş videolar tekrar eklenmez.
   const loadMore = useCallback(async () => {
-    if (loadingMoreRef.current || moreErrorsRef.current >= 3) return;
+    if (loadingMoreRef.current || Date.now() < moreCooldownRef.current) return;
     loadingMoreRef.current = true;
+    let found = false;
     try {
-      const page = await fetchFeedPage({ cursor: cursorRef.current, count: 8 });
-      cursorRef.current = page?.nextCursor || cursorRef.current;
-      const fresh = decorate(page?.items, likedIds, savedIds, followingIds);
-      if (fresh.length) {
-        rawFeedRef.current = [...rawFeedRef.current, ...fresh];
-        setFeed(insertAds(rawFeedRef.current));
-        moreErrorsRef.current = 0;
-      } else {
-        moreErrorsRef.current += 1;
+      for (let attempt = 0; attempt < 3 && !found; attempt++) {
+        const page = await fetchFeedPage({ cursor: cursorRef.current, count: 10, includeOwn: false });
+        if (!page?.items?.length) break;
+        cursorRef.current = page.nextCursor ?? cursorRef.current;
+        const fresh = decorate(page.items, likedIds, savedIds, followingIds).filter(
+          (v) => v?.id && !shownIdsRef.current.has(v.id)
+        );
+        if (fresh.length) {
+          fresh.forEach((v) => shownIdsRef.current.add(v.id));
+          rawFeedRef.current = [...rawFeedRef.current, ...fresh];
+          setFeed(insertAds(rawFeedRef.current));
+          found = true;
+        }
+      }
+      if (!found) {
+        // Havuzdaki videolar zaten gösterildi; sunucu arka planda büyütüyor, biraz sonra tekrar dene.
+        moreCooldownRef.current = Date.now() + 12000;
       }
     } catch {
-      moreErrorsRef.current += 1;
+      moreCooldownRef.current = Date.now() + 5000;
     } finally {
       loadingMoreRef.current = false;
     }

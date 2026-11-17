@@ -178,13 +178,17 @@ async function resolveUid(req) {
 
 // --- TikTok trend videoları (traceryn/tiktok-sdk) ---
 // SDK saf ESM olduğu için CommonJS sunucudan dinamik import ile yüklenir.
-const TRENDING_TTL_MS = Number(process.env.TIKTOK_TRENDING_TTL_MS) || 10 * 60 * 1000;
 let tiktokClient = null;
 let tiktokSession = null;
 let tiktokSdkPromise = null;
-// Sonsuz feed için büyüyen havuz: her istek yeni benzersiz video eklemeye çalışır.
-const TRENDING_POOL_MAX = 300;
-let trendingPool = { items: [], source: null, updatedAt: 0, growing: null };
+// Sonsuz feed için büyüyen havuz: arka planda sürekli yeni benzersiz video eklenir.
+const TRENDING_POOL_TARGET = Math.max(Number(process.env.TIKTOK_POOL_TARGET) || 160, 40);
+const TRENDING_POOL_MAX = Math.max(Number(process.env.TIKTOK_POOL_MAX) || 400, TRENDING_POOL_TARGET);
+let trendingPool = { items: [], source: null, updatedAt: 0 };
+let poolFiller = null;
+// Havuz hedefi: istemci sona gelip yeni video bulamazsa hedef büyütülür.
+let poolTarget = TRENDING_POOL_TARGET;
+let poolStarveUntil = 0;
 
 async function getTikTokClient() {
   if (tiktokClient) return tiktokClient;
@@ -337,7 +341,7 @@ function ensureChromium(pw) {
 }
 
 // Tek bir sayfada (explore/foryou) item_list yanıtlarını yakalar; sabırla indirir.
-async function captureItemListPage(pw, url, target, timeoutMs) {
+async function captureItemListPage(pw, url, target, timeoutMs, locale = 'en-US') {
   const browser = await pw.chromium.launch({
     headless: true,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox', '--disable-dev-shm-usage'],
@@ -346,7 +350,8 @@ async function captureItemListPage(pw, url, target, timeoutMs) {
   try {
     const context = await browser.newContext({
       userAgent: EXPLORE_UA,
-      locale: 'en-US',
+      locale,
+      extraHTTPHeaders: { 'Accept-Language': `${locale},en;q=0.8` },
       viewport: { width: 1400, height: 900 },
     });
     const page = await context.newPage();
@@ -391,8 +396,8 @@ async function captureItemListPage(pw, url, target, timeoutMs) {
         lastGainAt = Date.now();
       }
       if (collected.size >= target) break;
-      if (collected.size >= minWanted && Date.now() - lastGainAt > 18000) break;
-      if (Date.now() - lastScrollAt > 2500) {
+      if (collected.size >= minWanted && Date.now() - lastGainAt > 15000) break;
+      if (Date.now() - lastScrollAt > 1200) {
         lastScrollAt = Date.now();
         await page.mouse.wheel(0, 2400).catch(() => {});
         // Sayfa kendi kaydırma kabını kullanıyorsa onu da kaydır.
@@ -415,102 +420,92 @@ async function captureItemListPage(pw, url, target, timeoutMs) {
   }
 }
 
-async function fetchTrendingFromExplore(count = 30) {
+// Her yakalama sıradaki kaynağı kullanır: farklı sayfa/dil = daha çok benzersiz video.
+const CAPTURE_SOURCES = [
+  { url: EXPLORE_URL, locale: 'en-US' },
+  { url: EXPLORE_URL, locale: 'tr-TR' },
+  { url: FORYOU_URL, locale: 'en-US' },
+  { url: FORYOU_URL, locale: 'tr-TR' },
+];
+let captureSourceIdx = 0;
+
+// Sıradaki kaynaktan bir sayfa yakalar; boş dönerse bir sonraki kaynağı dener.
+async function captureNextPage(target, diag = null) {
   if (process.env.TIKTOK_EXPLORE === 'false') return [];
   const pw = loadPlaywright();
   if (!pw?.chromium) return [];
 
-  // Render'ın paylaşımlı CPU'sunda tarayıcı yavaş; toplam süreyi kısa tutuyoruz.
-  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 25000, 10000), 60000);
-  const target = Math.min(Math.max(count, 12), 50);
-
-  let best = [];
+  const timeoutMs = Math.min(Math.max(Number(process.env.TIKTOK_EXPLORE_TIMEOUT_MS) || 30000, 10000), 90000);
   let lastError = null;
-  const pages = [
-    [EXPLORE_URL, timeoutMs],
-    [FORYOU_URL, Math.max(10000, Math.round(timeoutMs / 2))],
-  ];
-  for (const [url, pageTimeout] of pages) {
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const source = CAPTURE_SOURCES[captureSourceIdx % CAPTURE_SOURCES.length];
+    captureSourceIdx += 1;
     try {
-      const items = await captureItemListPage(pw, url, target, pageTimeout);
-      console.log(`TikTok ${url}: ${items.length} video yakalandı`);
-      if (items.length > best.length) best = items;
-      if (best.length >= Math.min(12, target)) break;
+      const items = await captureItemListPage(pw, source.url, target, timeoutMs, source.locale);
+      const label = `${source.url.replace('https://www.tiktok.com', '')} (${source.locale})`;
+      console.log(`TikTok ${label}: ${items.length} video`);
+      if (diag) diag.capture = `${label}: ${items.length}`;
+      if (items.length) return items;
     } catch (e) {
       lastError = e;
-      console.warn(`TikTok ${url} başarısız:`, e?.message || e);
+      console.warn(`TikTok ${source.url} (${source.locale}) başarısız:`, e?.message || e);
+      if (/Executable doesn't exist|browserType\.launch/i.test(String(e?.message || ''))) {
+        ensureChromium(pw);
+        throw e;
+      }
     }
   }
-
-  if (best.length) return best.slice(0, count);
-  if (lastError) {
-    // Eksik Chromium: indirmeyi tetikle, bu istek yedek stratejiye düşsün.
-    if (/Executable doesn't exist|browserType\.launch/i.test(String(lastError?.message || ''))) ensureChromium(pw);
-    throw lastError;
-  }
+  if (lastError) throw lastError;
   return [];
 }
 
-async function fetchRecommendItems(count = 24) {
-  const client = await getTikTokClient();
-  const result = await withTimeout(client.getTrendingVideos(count), 20000, 'TikTok recommend');
-  const list = Array.isArray(result?.videos) ? result.videos : [];
-  return list.map(normalizeTrendingVideo).filter((v) => v.id && (v.cover || v.playUrl));
+function addToPool(items) {
+  const seen = new Set(trendingPool.items.map((v) => v.id));
+  let added = 0;
+  for (const v of items || []) {
+    if (trendingPool.items.length >= TRENDING_POOL_MAX) break;
+    if (!v?.id || seen.has(v.id)) continue;
+    if (isOfficialTikTokAuthor(v)) continue;
+    seen.add(v.id);
+    trendingPool.items.push(v);
+    added += 1;
+  }
+  if (added) {
+    trendingPool.source = trendingPool.source || 'explore';
+    trendingPool.updatedAt = Date.now();
+  }
+  return added;
 }
 
-// Havuzu hedef sayıya çıkarır: SDK recommend (çoğu zaman boş) → Keşfet → /foryou.
-// Aynı anda tek büyütme çalışır; video yoksa false döner.
-async function growTrendingPool(targetItems, diag = null) {
-  if (trendingPool.growing) return trendingPool.growing;
-  if (trendingPool.items.length >= targetItems && trendingPool.items.length >= 24) return false;
+// Havuzu arka planda hedefe kadar büyütür; istekleri bekletmez (aynı anda tek iş).
+function ensurePoolGrowing({ maxCaptures = 3, target = poolTarget } = {}) {
+  if (poolFiller) return poolFiller;
+  if (trendingPool.items.length >= target) return Promise.resolve(0);
 
   const task = (async () => {
-    const before = trendingPool.items.length;
-    const add = (list, source) => {
-      const seen = new Set(trendingPool.items.map((v) => v.id));
-      for (const v of list || []) {
-        if (trendingPool.items.length >= TRENDING_POOL_MAX) break;
-        if (!v?.id || seen.has(v.id)) continue;
-        if (isOfficialTikTokAuthor(v)) continue;
-        seen.add(v.id);
-        trendingPool.items.push(v);
-      }
-      if (!trendingPool.source && trendingPool.items.length > before) trendingPool.source = source;
-    };
-
-    // 1) SDK'nın kendi recommend çağrısı (TikTok imza istediği için çoğu zaman boş)
-    if (!before) {
+    let addedTotal = 0;
+    let idle = 0;
+    for (let i = 0; i < maxCaptures && trendingPool.items.length < target && idle < 2; i++) {
+      const need = Math.min(120, Math.max(target - trendingPool.items.length, 24));
+      let items = [];
       try {
-        const recommend = await fetchRecommendItems(Math.min(Math.max(targetItems, 24), 30));
-        if (diag) diag.recommend = `${recommend.length} video`;
-        add(recommend, 'recommend');
+        items = await captureNextPage(need);
       } catch (e) {
-        if (diag) diag.recommend = `hata: ${e?.message || e}`;
+        idle += 1;
+        continue;
       }
+      const added = addToPool(items);
+      addedTotal += added;
+      idle = added ? 0 : idle + 1;
     }
-
-    // 2) Başsız Chromium ile gerçek Keşfet yanıtları
-    const need = Math.max(targetItems - trendingPool.items.length, 24);
-    try {
-      const explore = await fetchTrendingFromExplore(Math.min(Math.max(need, 24), 50));
-      if (diag) diag.explore = `${explore.length} video`;
-      add(explore, 'explore');
-    } catch (e) {
-      if (diag) diag.explore = `hata: ${e?.message || e}`;
-      console.warn('TikTok explore hatası:', e?.message || e);
-    }
-
-    // Çalma listesi yedeği kaldırıldı: içeriğin tamamı @tiktok hesabından ve ~40 sn sürüyor.
-
-    trendingPool.updatedAt = Date.now();
-    if (diag) diag.pool = trendingPool.items.length;
-    return trendingPool.items.length > before;
+    return addedTotal;
   })();
 
-  trendingPool.growing = task.finally(() => {
-    trendingPool.growing = null;
+  poolFiller = task.finally(() => {
+    poolFiller = null;
   });
-  return trendingPool.growing;
+  return poolFiller;
 }
 
 const app = express();
@@ -551,26 +546,39 @@ app.get('/trending', async (req, res) => {
   const cursor = Math.max(Number(req.query.cursor) || 0, 0);
   const diag = req.query.debug === '1' ? { chromium: chromiumInstallState } : null;
 
-  if (force) trendingPool = { items: [], source: null, updatedAt: 0, growing: null };
-
-  const stale = Date.now() - trendingPool.updatedAt > TRENDING_TTL_MS;
-  const short = cursor + count > trendingPool.items.length;
+  if (force) trendingPool = { items: [], source: null, updatedAt: 0 };
 
   try {
-    if (!trendingPool.items.length || (stale && cursor === 0)) {
+    if (!trendingPool.items.length) {
       // Havuz boşsa beklemek zorundayız; yoksa hiç video dönmez.
-      await growTrendingPool(Math.max(count * 2, 24), diag);
-    } else if (short) {
-      // Sayfa tükeniyor: yeni videolar eklemeye çalış ama istemciyi çok bekletme.
-      // Büyütme arka planda sürer, sonraki istekler aynı işleme bağlanır.
-      await Promise.race([
-        growTrendingPool(cursor + count, diag).catch(() => false),
-        new Promise((resolve) => setTimeout(resolve, 12000)),
+      // İlk sayfayı kısa tut, kalan büyüme arka planda sürsün.
+      await ensurePoolGrowing({ maxCaptures: 1, target: Math.max(count * 2, 24) });
+    } else if (cursor + count > trendingPool.items.length) {
+      // Havuz tükeniyor: yeni videoları bekle ama istemciyi çok bekletme.
+      // Büyütme arka planda sürer, sonraki istekler aynı işe bağlanır.
+      const exhausted = cursor >= trendingPool.items.length;
+      if (exhausted && Date.now() > poolStarveUntil) {
+        // Tüm havuz gösterildi: hedefi büyüt ki akış tekrara düşmeden devam etsin.
+        poolTarget = Math.min(
+          TRENDING_POOL_MAX,
+          Math.max(trendingPool.items.length + 80, poolTarget + 40)
+        );
+      }
+      const added = await Promise.race([
+        ensurePoolGrowing({ maxCaptures: 2 }).catch(() => -1),
+        new Promise((resolve) => setTimeout(() => resolve(-1), 6000)),
       ]);
+      if (exhausted && added === 0) {
+        // TikTok yeni video vermiyor: bir süre boşuna tarayıcı açma.
+        poolStarveUntil = Date.now() + 5 * 60 * 1000;
+      }
     }
   } catch (e) {
     console.warn('TikTok trend havuzu büyütülemedi:', e?.message || e);
   }
+
+  // Havuzu hedefe kadar arka planda doldurmaya devam et.
+  ensurePoolGrowing().catch(() => {});
 
   const items = trendingPool.items;
   if (!items.length) {
@@ -583,10 +591,13 @@ app.get('/trending', async (req, res) => {
   let start = cursor;
   let looped = false;
   if (start >= items.length) {
-    start = 0;
+    // Başa dönerken rastgele bir noktadan başla: aynı sıra hemen tekrar etmesin.
+    const maxStart = Math.max(0, items.length - count);
+    start = maxStart > 0 ? Math.floor(Math.random() * (maxStart + 1)) : 0;
     looped = true;
   }
   const slice = items.slice(start, start + count);
+  if (diag) diag.pool = items.length;
 
   return res.json({
     ok: true,
@@ -596,6 +607,7 @@ app.get('/trending', async (req, res) => {
     nextCursor: start + slice.length,
     hasMore: true,
     poolSize: items.length,
+    poolTarget,
     fetchedAt: new Date(trendingPool.updatedAt || Date.now()).toISOString(),
     videos: slice,
     ...(diag ? { debug: diag } : {}),
