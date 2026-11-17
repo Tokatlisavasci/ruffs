@@ -263,6 +263,12 @@ function normalizeTrendingVideo(item) {
   };
 }
 
+// TikTok'un resmi hesabı (@tiktok) küratörlü çalma listelerinin içeriğini oluşturuyor;
+// akışta herkes @tiktok görünmesin diye bu hesabın videoları havuza alınmaz.
+function isOfficialTikTokAuthor(video) {
+  return String(video?.author?.uniqueId || '').trim().toLowerCase() === 'tiktok';
+}
+
 function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -416,6 +422,7 @@ async function fetchTrendingFromPlaylists(client, limit = 4) {
         const v = normalizeTrendingVideo(raw);
         if (!v.id || seen.has(v.id)) continue;
         if (!v.cover && !v.playUrl) continue;
+        if (isOfficialTikTokAuthor(v)) continue;
         seen.add(v.id);
         items.push(v);
       }
@@ -447,6 +454,7 @@ async function growTrendingPool(targetItems, diag = null) {
       for (const v of list || []) {
         if (trendingPool.items.length >= TRENDING_POOL_MAX) break;
         if (!v?.id || seen.has(v.id)) continue;
+        if (isOfficialTikTokAuthor(v)) continue;
         seen.add(v.id);
         trendingPool.items.push(v);
       }
@@ -885,4 +893,10 @@ app.post('/uploads/video/delete', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Ruffs API http://localhost:${PORT} (Loops configured: ${!!loopsConfig()})`);
+  // Chromium'u ilk istekte değil, sunucu açılırken indirmeye başla.
+  try {
+    ensureChromium(loadPlaywright());
+  } catch (e) {
+    console.warn('Chromium hazırlığı başlatılamadı:', e?.message || e);
+  }
 });
