@@ -192,21 +192,55 @@ export async function fetchUserVideos(uid) {
   return items;
 }
 
-async function fetchLoopsDiscoverFallback(limit = 20, force = false) {
-  if (!API_BASE_URL) return [];
+// TikTok CDN'i video isteklerinde Referer bekliyor; feed oynatıcısı bu başlığı kullanır.
+const TIKTOK_PLAYBACK_HEADERS = { Referer: 'https://www.tiktok.com/' };
+
+function mapTrendingToFeedItem(v) {
+  const author = v?.author || {};
+  const uniqueId = String(author.uniqueId || '').replace(/^@/, '');
+  const stats = v?.stats || {};
+  return {
+    id: `tt-${v.id}`,
+    external: true,
+    externalUrl: v.webUrl || null,
+    mediaType: 'video',
+    videoUrl: v.playUrl || null,
+    thumbnail: v.cover || null,
+    caption: v.desc || '',
+    playbackHeaders: TIKTOK_PLAYBACK_HEADERS,
+    uid: null,
+    user: {
+      uid: null,
+      username: uniqueId ? `@${uniqueId}` : '@tiktok',
+      displayName: author.nickname || uniqueId || 'TikTok',
+      avatar: author.avatar || null,
+      isVerified: !!author.verified,
+      isFollowing: false,
+    },
+    stats: {
+      views: Number(stats.views) || 0,
+      likes: Number(stats.likes) || 0,
+      comments: Number(stats.comments) || 0,
+      shares: Number(stats.shares) || 0,
+      saves: 0,
+    },
+    viewsCount: Number(stats.views) || 0,
+    likesCount: Number(stats.likes) || 0,
+  };
+}
+
+async function fetchTrendingFeedItems({ count = 24, refresh = false, timeoutMs = 15000 } = {}) {
   try {
-    const headers = await getSignHeaders();
-    const q = `limit=${encodeURIComponent(String(limit))}${force ? '&force=1' : ''}`;
-    const r = await fetch(`${API_BASE_URL}/feed/discover?${q}`, { headers });
-    if (!r.ok) return [];
-    const data = await r.json().catch(() => ({}));
-    return Array.isArray(data?.items) ? data.items : [];
+    // Feed'i bekletmemek için kısa süre: sunucu önbelleği sıcaksa hemen döner,
+    // soğuksa bu tur trendler atlanır (sonraki açılışta gelir).
+    const res = await fetchTrendingVideos({ count, refresh, timeoutMs });
+    return (res.videos || []).map(mapTrendingToFeedItem).filter((v) => v.videoUrl);
   } catch {
     return [];
   }
 }
 
-export async function fetchTrendingVideos({ count = 20, refresh = false } = {}) {
+export async function fetchTrendingVideos({ count = 20, refresh = false, timeoutMs = 90000 } = {}) {
   if (!API_BASE_URL) {
     throw new Error('Sunucu adresi tanımlı değil (EXPO_PUBLIC_SIGNING_API_URL).');
   }
@@ -214,7 +248,7 @@ export async function fetchTrendingVideos({ count = 20, refresh = false } = {}) 
     `${API_BASE_URL}/trending?count=${encodeURIComponent(String(count))}` + (refresh ? '&refresh=1' : '');
   const controller = new AbortController();
   // Sunucu gerektiğinde Chromium açıp Keşfet yanıtı yakalıyor; ilk istek uzun sürebilir.
-  const timer = setTimeout(() => controller.abort(), 90000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let res;
   let data = {};
   try {
@@ -239,7 +273,7 @@ export async function fetchTrendingVideos({ count = 20, refresh = false } = {}) 
   };
 }
 
-export async function fetchFeedVideos({ forceDiscover = false } = {}) {
+export async function fetchFeedVideos() {
   let own = [];
   if (isFirebaseConfigured && db) {
     try {
@@ -259,15 +293,15 @@ export async function fetchFeedVideos({ forceDiscover = false } = {}) {
       } catch { own = []; }
     }
   }
-  if (own.length >= 8) return own;
-  const extra = await fetchLoopsDiscoverFallback(Math.max(10, 20 - own.length), !!forceDiscover);
-  if (!extra.length) return own;
-  const seen = new Set(own.map((v) => String(v?.loopsId || v?.externalId || v?.id || '')));
+  // TikTok trend videoları kendi içeriklerden sonra normal akışa eklenir.
+  const trending = await fetchTrendingFeedItems({ count: 24 });
+  if (!trending.length) return own;
+
+  const seen = new Set(own.map((v) => String(v?.id || '')));
   const merged = [...own];
-  for (const v of extra) {
-    const k = String(v?.loopsId || v?.externalId || v?.id || '');
-    if (!k || seen.has(k)) continue;
-    seen.add(k);
+  for (const v of trending) {
+    if (!v?.id || seen.has(v.id)) continue;
+    seen.add(v.id);
     merged.push(v);
   }
   return merged;

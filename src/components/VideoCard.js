@@ -8,6 +8,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Dimensions,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -83,6 +84,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
   }, [video?.id, video?.viewsCount, video?.stats?.views]);
 
   useEffect(() => {
+    if (video?.external) return; // TikTok videoları bizim izlenme sayacımıza yazılmaz
     if (!isActive || !isFocused || !video?.id || viewedRef.current) return;
     viewedRef.current = true;
     recordVideoView(video.id).then((r) => {
@@ -93,6 +95,12 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
 
   const handleLike = async () => {
     if (liking || !video?.id) return;
+    if (video?.external) {
+      // Dış video: sunucuya yazmadan sadece görsel geri bildirim.
+      setLiked((prev) => !prev);
+      setLikesCount((prev) => Math.max(0, (typeof prev === 'number' ? prev : 0) + (liked ? -1 : 1)));
+      return;
+    }
     const prevLiked = liked;
     const prevCount = likesCount;
     const nextLiked = !prevLiked;
@@ -114,6 +122,10 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
 
   const handleSave = async () => {
     if (saving || !video?.id) return;
+    if (video?.external) {
+      setSaved((prev) => !prev);
+      return;
+    }
     const prev = saved;
     const prevCount = savesCount;
     const next = !prev;
@@ -161,7 +173,14 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
     }
   };
 
-  const player = useVideoPlayer(n.mediaType === 'video' ? n.source : null, (p) => {
+  // TikTok CDN'i Referer başlığı olmadan 403 dönüyor.
+  const playbackSource = useMemo(() => {
+    if (!n.source) return null;
+    if (video?.playbackHeaders) return { uri: n.source, headers: video.playbackHeaders };
+    return n.source;
+  }, [n.source, video?.playbackHeaders]);
+
+  const player = useVideoPlayer(n.mediaType === 'video' ? playbackSource : null, (p) => {
     p.loop = true;
   });
 
@@ -171,7 +190,7 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
       if (isActive && isFocused) player.play();
       else player.pause();
     } catch {}
-  }, [isActive, isFocused, n.source, n.mediaType, player]);
+  }, [isActive, isFocused, playbackSource, n.mediaType, player]);
 
   return (
     <View style={[styles.container, { width: itemWidth, height: itemHeight }]}>
@@ -232,7 +251,13 @@ const VideoCard = ({ video, isActive, itemHeight = height, itemWidth = width, on
           <Text style={styles.actionText}>{formatCount(savesCount)}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.actionBtn}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={() => {
+            if (video?.externalUrl) Linking.openURL(video.externalUrl).catch(() => {});
+          }}
+          disabled={!video?.externalUrl}
+        >
           <Ionicons name="arrow-redo" size={32} color="#fff" />
           <Text style={styles.actionText}>Paylaş</Text>
         </TouchableOpacity>
