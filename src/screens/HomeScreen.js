@@ -16,6 +16,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import VideoCard from '../components/VideoCard';
 import NativeAdFeedCard from '../components/NativeAdFeedCard';
+import { isNativeAdsAvailable } from '../config/ads';
 import FeedErrorBoundary from '../components/FeedErrorBoundary';
 import { fetchFeedVideos, fetchMyLikedIds, fetchMySavedIds, fetchMyFollowingIds } from '../services/videos';
 
@@ -124,6 +125,8 @@ const HomeScreen = () => {
   }).current;
 
   const insertAds = (items) => {
+    // Expo Go'da AdMob native modülü yok; reklam yuvası da eklenmez.
+    if (!isNativeAdsAvailable()) return items || [];
     const out = [];
     const every = 4; // her 4 videodan sonra 1 reklam
     (items || []).forEach((v, i) => {

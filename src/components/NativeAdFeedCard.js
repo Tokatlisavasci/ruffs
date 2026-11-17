@@ -1,13 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Dimensions, ActivityIndicator } from 'react-native';
-import {
-  NativeAd,
-  NativeAdView,
-  NativeAsset,
-  NativeAssetType,
-  NativeMediaView,
-  TestIds,
-} from 'react-native-google-mobile-ads';
+import { getAds } from '../config/ads';
 
 const { width, height } = Dimensions.get('window');
 
@@ -15,10 +8,13 @@ const { width, height } = Dimensions.get('window');
 export const FEED_NATIVE_AD_UNIT_ID = 'ca-app-pub-5438786046362290/8886762349';
 
 const NativeAdFeedCard = ({ isActive }) => {
+  const ads = getAds();
+  const { NativeAd, NativeAdView, NativeAsset, NativeAssetType, NativeMediaView } = ads || {};
   const [nativeAd, setNativeAd] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
+    if (!NativeAd) return undefined;
     let mounted = true;
     let ad;
     NativeAd.createForAdRequest(FEED_NATIVE_AD_UNIT_ID, { requestNonPersonalizedAdsOnly: false })
@@ -34,7 +30,10 @@ const NativeAdFeedCard = ({ isActive }) => {
       mounted = false;
       try { ad?.destroy?.(); } catch {}
     };
-  }, []);
+  }, [NativeAd]);
+
+  // Native modül yoksa (Expo Go) reklam kartı hiç gösterilmez.
+  if (!ads || !NativeAd) return null;
 
   if (error) {
     return (
